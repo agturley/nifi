@@ -53,7 +53,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -177,6 +176,15 @@ public class FetchFile extends AbstractProcessor {
         .required(true)
         .build();
 
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(
+            FILENAME,
+            COMPLETION_STRATEGY,
+            MOVE_DESTINATION_DIR,
+            CONFLICT_STRATEGY,
+            FILE_NOT_FOUND_LOG_LEVEL,
+            PERM_DENIED_LOG_LEVEL
+    );
+
     static final Relationship REL_SUCCESS = new Relationship.Builder()
         .name("success")
         .description("Any FlowFile that is successfully fetched from the file system will be transferred to this Relationship.")
@@ -195,26 +203,21 @@ public class FetchFile extends AbstractProcessor {
             "Any FlowFile that could not be fetched from the file system for any reason other than insufficient permissions or the file not existing will be transferred to this Relationship.")
         .build();
 
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(
+            REL_SUCCESS,
+            REL_NOT_FOUND,
+            REL_PERMISSION_DENIED,
+            REL_FAILURE
+    );
+
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        final List<PropertyDescriptor> properties = new ArrayList<>();
-        properties.add(FILENAME);
-        properties.add(COMPLETION_STRATEGY);
-        properties.add(MOVE_DESTINATION_DIR);
-        properties.add(CONFLICT_STRATEGY);
-        properties.add(FILE_NOT_FOUND_LOG_LEVEL);
-        properties.add(PERM_DENIED_LOG_LEVEL);
-        return properties;
+        return PROPERTIES;
     }
 
     @Override
     public Set<Relationship> getRelationships() {
-        final Set<Relationship> relationships = new HashSet<>();
-        relationships.add(REL_SUCCESS);
-        relationships.add(REL_NOT_FOUND);
-        relationships.add(REL_PERMISSION_DENIED);
-        relationships.add(REL_FAILURE);
-        return relationships;
+        return RELATIONSHIPS;
     }
 
     @Override
@@ -252,7 +255,7 @@ public class FetchFile extends AbstractProcessor {
             session.transfer(session.penalize(flowFile), REL_FAILURE);
             return;
         } else if (!Files.exists(filePath)) {
-            getLogger().log(levelFileNotFound, "Could not fetch file {} from file system for {} because the file does not exist; routing to not.found", new Object[] {file, flowFile});
+            getLogger().log(levelFileNotFound, "Could not fetch file {} from file system for {} because the file does not exist; routing to not.found", file, flowFile);
             session.getProvenanceReporter().route(flowFile, REL_NOT_FOUND);
             session.transfer(session.penalize(flowFile), REL_NOT_FOUND);
             return;
@@ -314,7 +317,7 @@ public class FetchFile extends AbstractProcessor {
         try (final FileInputStream fis = new FileInputStream(file)) {
             flowFile = session.importFrom(fis, flowFile);
         } catch (final IOException | FlowFileAccessException ioe) {
-            getLogger().error("Could not fetch file {} from file system for {} due to {}; routing to failure", file, flowFile, ioe.toString(), ioe);
+            getLogger().error("Could not fetch file {} from file system for {}", file, flowFile, ioe);
             session.transfer(session.penalize(flowFile), REL_FAILURE);
             return;
         }

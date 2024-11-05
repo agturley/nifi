@@ -931,7 +931,7 @@ provides a "Usage" menu item in the context menu. Additionally, the
 UI exposes a "Help" link in the top-right corner, from which the same
 Usage information can be found.
 
-The advanced documentation of a Processor is provided as an HTML file named `additionalDetails.html`.
+The advanced documentation of a Processor is provided as a Markdown file named `additionalDetails.md`.
 This file should exist within a directory whose name is the
 fully-qualified
 name of the Processor, and this directory's parent should be named
@@ -2637,10 +2637,10 @@ Sometimes it may be desirable to deprecate a component. Whenever this occurs the
 ----
 @DeprecationNotice(
         reason = "Legacy Protocol has been superseded",
-        alternatives = {ListenSyslog.class},
-        classNames = {"org.apache.nifi.processors.standard.ListenRELP"}
+        alternatives = {SomeNewProcessor.class},
+        classNames = {"org.apache.nifi.processors.standard.SomeOldProcessor"}
 )
-public class ListenLegacyProtocol extends AbstractProcessor {}
+public class SomeOldProcessor extends AbstractProcessor {}
 ----
 The `alternatives` property can be used to define an array of recommended replacement Components, while `classNames`
 can be used to represent similar content through an array of class name strings.
@@ -2649,7 +2649,7 @@ Adding the `@DeprecationNotice` annotation renders a warning message in generate
 following warning when the Flow Configuration includes the component:
 
 ----
-Added Deprecated Component ListenLegacyProtocol[id=929a52c7-1e3e-423e-b303-6ca2ef657617] See alternatives [ListenSyslog,ListenRELP]
+Added Deprecated Component SomeOldProcessor[id=929a52c7-1e3e-423e-b303-6ca2ef657617] See alternatives [SomeNewProcessor]
 ----
 
 === Feature Deprecation
@@ -2699,9 +2699,7 @@ deprecationLogger.warn(
 |==================================================================================================================================================
 | Package                | Maven Profile         | Description
 | Apache Hadoop Bundle   | include-hadoop        | Adds support for Apache Hadoop with HDFS and Parquet components
-| Apache HBase Bundle    | include-hbase         | Adds support for Apache HBase
 | Apache IoTDB Bundle    | include-iotdb         | Adds support for Apache IoTDB
-| Apache Kudu Bundle     | include-kudu          | Adds support for Apache Kudu
 | ASN.1 Support          | include-asn1          | Adds support for ASN.1
 | Contribution Check     | contrib-check         | Runs various quality checks that are required to be accepted before a contribution can be accepted into the core NiFi code base.
 | Graph Database Bundle  | include-graph         | Adds support for various common graph database scenarios. Support is currently for https://neo4j.com/developer/cypher[Cypher] and https://tinkerpop.apache.org/gremlin.html[Gremlin]-compatible databases such as Neo4J and JanusGraph. Includes controller services that provide driver functionality and a suite of processors for ingestion and querying.

@@ -17,12 +17,6 @@
 
 package org.apache.nifi.processors.standard;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.atomic.AtomicReference;
 import org.apache.nifi.annotation.behavior.InputRequirement;
 import org.apache.nifi.annotation.behavior.SideEffectFree;
 import org.apache.nifi.annotation.behavior.SupportsBatching;
@@ -35,12 +29,15 @@ import org.apache.nifi.logging.ComponentLog;
 import org.apache.nifi.processor.AbstractProcessor;
 import org.apache.nifi.processor.ProcessContext;
 import org.apache.nifi.processor.ProcessSession;
-import org.apache.nifi.processor.ProcessorInitializationContext;
 import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.util.StandardValidators;
-import org.apache.nifi.security.util.crypto.HashAlgorithm;
-import org.apache.nifi.security.util.crypto.HashService;
+import org.apache.nifi.processors.standard.hash.HashAlgorithm;
+import org.apache.nifi.processors.standard.hash.HashService;
+
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 @SideEffectFree
 @SupportsBatching
@@ -73,6 +70,11 @@ public class CryptographicHashContent extends AbstractProcessor {
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .build();
 
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(
+            FAIL_WHEN_EMPTY,
+            HASH_ALGORITHM
+    );
+
     public static final Relationship REL_SUCCESS = new Relationship.Builder()
             .name("success")
             .description("Used for flowfiles that have a hash value added")
@@ -83,31 +85,19 @@ public class CryptographicHashContent extends AbstractProcessor {
             .description("Used for flowfiles that have no content if the 'fail on empty' setting is enabled")
             .build();
 
-    private static Set<Relationship> relationships;
-
-    private static List<PropertyDescriptor> properties;
-
-    @Override
-    protected void init(final ProcessorInitializationContext context) {
-        final Set<Relationship> _relationships = new HashSet<>();
-        _relationships.add(REL_FAILURE);
-        _relationships.add(REL_SUCCESS);
-        relationships = Collections.unmodifiableSet(_relationships);
-
-        final List<PropertyDescriptor> _properties = new ArrayList<>();
-        _properties.add(FAIL_WHEN_EMPTY);
-        _properties.add(HASH_ALGORITHM);
-        properties = Collections.unmodifiableList(_properties);
-    }
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(
+            REL_FAILURE,
+            REL_SUCCESS
+    );
 
     @Override
     public Set<Relationship> getRelationships() {
-        return relationships;
+        return RELATIONSHIPS;
     }
 
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        return properties;
+        return PROPERTIES;
     }
 
     @Override
@@ -120,7 +110,7 @@ public class CryptographicHashContent extends AbstractProcessor {
 
         // Determine the algorithm to use
         final String algorithmName = context.getProperty(HASH_ALGORITHM).getValue();
-        logger.debug("Using algorithm {}", new Object[]{algorithmName});
+        logger.debug("Using algorithm {}", algorithmName);
         HashAlgorithm algorithm = HashAlgorithm.fromName(algorithmName);
 
         if (flowFile.getSize() == 0) {
@@ -129,13 +119,13 @@ public class CryptographicHashContent extends AbstractProcessor {
                 session.transfer(flowFile, REL_FAILURE);
                 return;
             } else {
-                logger.debug("Flowfile content is empty; hashing with {} anyway", new Object[]{algorithmName});
+                logger.debug("Flowfile content is empty; hashing with {} anyway", algorithmName);
             }
         }
 
         // Generate a hash with the configured algorithm for the content
         // and create a new attribute with the configured name
-        logger.debug("Generating {} hash of content", new Object[]{algorithmName});
+        logger.debug("Generating {} hash of content", algorithmName);
         final AtomicReference<String> hashValueHolder = new AtomicReference<>(null);
 
         try {
@@ -144,17 +134,17 @@ public class CryptographicHashContent extends AbstractProcessor {
 
             // Determine the destination attribute name
             final String attributeName = "content_" + algorithmName;
-            logger.debug("Writing {} hash to attribute '{}'", new Object[]{algorithmName, attributeName});
+            logger.debug("Writing {} hash to attribute '{}'", algorithmName, attributeName);
 
             // Write the attribute
             flowFile = session.putAttribute(flowFile, attributeName, hashValueHolder.get());
-            logger.info("Successfully added attribute '{}' to {} with a value of {}; routing to success", new Object[]{attributeName, flowFile, hashValueHolder.get()});
+            logger.info("Successfully added attribute '{}' to {} with a value of {}; routing to success", attributeName, flowFile, hashValueHolder.get());
 
             // Update provenance and route to success
             session.getProvenanceReporter().modifyAttributes(flowFile);
             session.transfer(flowFile, REL_SUCCESS);
         } catch (ProcessException e) {
-            logger.error("Failed to process {} due to {}; routing to failure", new Object[]{flowFile, e});
+            logger.error("Routing to failure since failed to process {}", flowFile, e);
             session.transfer(flowFile, REL_FAILURE);
         }
     }

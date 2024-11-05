@@ -16,24 +16,6 @@
  */
 package org.apache.nifi.processors.standard;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
-import java.util.function.Function;
-import java.util.function.Supplier;
-import java.util.stream.Collectors;
-
 import org.apache.commons.lang3.StringUtils;
 import org.apache.nifi.annotation.behavior.InputRequirement;
 import org.apache.nifi.annotation.behavior.InputRequirement.Requirement;
@@ -60,6 +42,22 @@ import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.processors.standard.WaitNotifyProtocol.Signal;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import static org.apache.nifi.processor.FlowFileFilter.FlowFileFilterResult.ACCEPT_AND_CONTINUE;
 import static org.apache.nifi.processor.FlowFileFilter.FlowFileFilterResult.ACCEPT_AND_TERMINATE;
@@ -239,6 +237,19 @@ public class Wait extends AbstractProcessor {
         .expressionLanguageSupported(ExpressionLanguageScope.NONE)
         .build();
 
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(
+            RELEASE_SIGNAL_IDENTIFIER,
+            TARGET_SIGNAL_COUNT,
+            SIGNAL_COUNTER_NAME,
+            WAIT_BUFFER_COUNT,
+            RELEASABLE_FLOWFILE_COUNT,
+            EXPIRATION_DURATION,
+            DISTRIBUTED_CACHE_SERVICE,
+            ATTRIBUTE_COPY_MODE,
+            WAIT_MODE,
+            WAIT_PENALTY_DURATION
+    );
+
     public static final Relationship REL_SUCCESS = new Relationship.Builder()
             .name("success")
             .description("A FlowFile with a matching release signal in the cache will be routed to this relationship")
@@ -259,38 +270,23 @@ public class Wait extends AbstractProcessor {
             .description("A FlowFile that has exceeded the configured Expiration Duration will be routed to this relationship")
             .build();
 
-    private final Set<Relationship> relationships;
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(
+            REL_SUCCESS,
+            REL_WAIT,
+            REL_EXPIRED,
+            REL_FAILURE
+    );
 
     private final Map<String, Long> signalIdPenalties = new HashMap<>();
 
-    public Wait() {
-        final Set<Relationship> rels = new HashSet<>();
-        rels.add(REL_SUCCESS);
-        rels.add(REL_WAIT);
-        rels.add(REL_EXPIRED);
-        rels.add(REL_FAILURE);
-        relationships = Collections.unmodifiableSet(rels);
-    }
-
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        final List<PropertyDescriptor> descriptors = new ArrayList<>();
-        descriptors.add(RELEASE_SIGNAL_IDENTIFIER);
-        descriptors.add(TARGET_SIGNAL_COUNT);
-        descriptors.add(SIGNAL_COUNTER_NAME);
-        descriptors.add(WAIT_BUFFER_COUNT);
-        descriptors.add(RELEASABLE_FLOWFILE_COUNT);
-        descriptors.add(EXPIRATION_DURATION);
-        descriptors.add(DISTRIBUTED_CACHE_SERVICE);
-        descriptors.add(ATTRIBUTE_COPY_MODE);
-        descriptors.add(WAIT_MODE);
-        descriptors.add(WAIT_PENALTY_DURATION);
-        return descriptors;
+        return PROPERTIES;
     }
 
     @Override
     public Set<Relationship> getRelationships() {
-        return relationships;
+        return RELATIONSHIPS;
     }
 
     @Override
@@ -330,7 +326,7 @@ public class Wait extends AbstractProcessor {
             // if the computed value is null, or empty, we transfer the FlowFile to failure relationship
             if (StringUtils.isBlank(fSignalId)) {
                 // We can't penalize f before getting it from session, so keep it in a temporal list.
-                logger.error("FlowFile {} has no attribute for given Release Signal Identifier", new Object[] {f});
+                logger.error("FlowFile {} has no attribute for given Release Signal Identifier", f);
                 failedFilteringFlowFiles.add(f);
                 return ACCEPT_AND_CONTINUE;
             }
@@ -442,7 +438,7 @@ public class Wait extends AbstractProcessor {
             try {
                 lWaitStartTimestamp = Long.parseLong(waitStartTimestamp);
             } catch (NumberFormatException nfe) {
-                logger.error("{} has an invalid value '{}' on FlowFile {}", new Object[] {WAIT_START_TIMESTAMP, waitStartTimestamp, flowFile});
+                logger.error("{} has an invalid value '{}' on FlowFile {}", WAIT_START_TIMESTAMP, waitStartTimestamp, flowFile);
                 transferToFailure.accept(flowFile);
                 continue;
             }
@@ -452,7 +448,7 @@ public class Wait extends AbstractProcessor {
                     .asTimePeriod(TimeUnit.MILLISECONDS);
             long now = System.currentTimeMillis();
             if (now > (lWaitStartTimestamp + expirationDuration)) {
-                logger.info("FlowFile {} expired after {}ms", new Object[] {flowFile, (now - lWaitStartTimestamp)});
+                logger.info("FlowFile {} expired after {}ms", flowFile, (now - lWaitStartTimestamp));
                 getFlowFilesFor.apply(REL_EXPIRED).add(flowFile);
                 continue;
             }
@@ -460,7 +456,7 @@ public class Wait extends AbstractProcessor {
             // If there's no signal yet, then we don't have to evaluate target counts. Return immediately.
             if (signal == null) {
                 if (logger.isDebugEnabled()) {
-                    logger.debug("No release signal found for {} on FlowFile {} yet", new Object[] {signalId, flowFile});
+                    logger.debug("No release signal found for {} on FlowFile {} yet", signalId, flowFile);
                 }
                 getFlowFilesFor.apply(REL_WAIT).add(flowFile);
                 continue;
@@ -470,14 +466,14 @@ public class Wait extends AbstractProcessor {
             if (candidates.isEmpty()) {
                 targetCounterName = context.getProperty(SIGNAL_COUNTER_NAME).evaluateAttributeExpressions(flowFile).getValue();
                 try {
-                    targetCount = Long.valueOf(context.getProperty(TARGET_SIGNAL_COUNT).evaluateAttributeExpressions(flowFile).getValue());
+                    targetCount = Long.parseLong(context.getProperty(TARGET_SIGNAL_COUNT).evaluateAttributeExpressions(flowFile).getValue());
                 } catch (final NumberFormatException e) {
                     transferToFailure.accept(flowFile);
                     logger.error("Failed to parse targetCount when processing {} due to {}", flowFile, e, e);
                     continue;
                 }
                 try {
-                    releasableFlowFileCount = Integer.valueOf(context.getProperty(RELEASABLE_FLOWFILE_COUNT).evaluateAttributeExpressions(flowFile).getValue());
+                    releasableFlowFileCount = Integer.parseInt(context.getProperty(RELEASABLE_FLOWFILE_COUNT).evaluateAttributeExpressions(flowFile).getValue());
                 } catch (final NumberFormatException e) {
                     transferToFailure.accept(flowFile);
                     logger.error("Failed to parse releasableFlowFileCount when processing {} due to {}", flowFile, e, e);

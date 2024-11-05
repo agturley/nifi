@@ -18,11 +18,12 @@ org.apache.nifi.processors.standard.CalculateRecordStats
 org.apache.nifi.processors.standard.CompressContent
 org.apache.nifi.processors.standard.ControlRate
 org.apache.nifi.processors.standard.ConvertCharacterSet
-org.apache.nifi.processors.standard.ConvertJSONToSQL
 org.apache.nifi.processors.standard.ConvertRecord
 org.apache.nifi.processors.standard.CountText
 org.apache.nifi.processors.standard.CryptographicHashContent
 org.apache.nifi.processors.standard.DebugFlow
+org.apache.nifi.processors.standard.DeleteFile
+org.apache.nifi.processors.standard.DeleteSFTP
 org.apache.nifi.processors.standard.DetectDuplicate
 org.apache.nifi.processors.standard.DeduplicateRecord
 org.apache.nifi.processors.standard.DistributeLoad
@@ -61,10 +62,8 @@ org.apache.nifi.processors.standard.JoinEnrichment
 org.apache.nifi.processors.standard.ListDatabaseTables
 org.apache.nifi.processors.standard.ListenFTP
 org.apache.nifi.processors.standard.ListenHTTP
-org.apache.nifi.processors.standard.ListenRELP
 org.apache.nifi.processors.standard.ListenSyslog
 org.apache.nifi.processors.standard.ListenTCP
-org.apache.nifi.processors.standard.ListenTCPRecord
 org.apache.nifi.processors.standard.ListenUDP
 org.apache.nifi.processors.standard.ListenUDPRecord
 org.apache.nifi.processors.standard.ListFile
@@ -80,7 +79,6 @@ org.apache.nifi.processors.standard.ModifyBytes
 org.apache.nifi.processors.standard.MonitorActivity
 org.apache.nifi.processors.standard.Notify
 org.apache.nifi.processors.standard.PackageFlowFile
-org.apache.nifi.processors.standard.ParseCEF
 org.apache.nifi.processors.standard.ParseSyslog
 org.apache.nifi.processors.standard.ParseSyslog5424
 org.apache.nifi.processors.standard.PartitionRecord

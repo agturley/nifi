@@ -20,16 +20,15 @@ import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.nifi.annotation.behavior.DynamicProperties;
-import org.apache.nifi.annotation.behavior.Restricted;
-import org.apache.nifi.annotation.behavior.Restriction;
-
 import org.apache.nifi.annotation.behavior.DynamicProperty;
-import org.apache.nifi.annotation.behavior.WritesAttributes;
-import org.apache.nifi.annotation.behavior.WritesAttribute;
-import org.apache.nifi.annotation.behavior.SupportsSensitiveDynamicProperties;
 import org.apache.nifi.annotation.behavior.InputRequirement;
 import org.apache.nifi.annotation.behavior.InputRequirement.Requirement;
+import org.apache.nifi.annotation.behavior.Restricted;
+import org.apache.nifi.annotation.behavior.Restriction;
 import org.apache.nifi.annotation.behavior.SupportsBatching;
+import org.apache.nifi.annotation.behavior.SupportsSensitiveDynamicProperties;
+import org.apache.nifi.annotation.behavior.WritesAttribute;
+import org.apache.nifi.annotation.behavior.WritesAttributes;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
 import org.apache.nifi.annotation.documentation.Tags;
 import org.apache.nifi.components.AllowableValue;
@@ -53,6 +52,7 @@ import org.apache.nifi.processor.io.InputStreamCallback;
 import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.processors.standard.util.ArgumentUtils;
 import org.apache.nifi.processors.standard.util.SoftLimitBoundedByteArrayOutputStream;
+import org.apache.nifi.stream.io.LimitingInputStream;
 import org.apache.nifi.stream.io.StreamUtils;
 
 import java.io.BufferedInputStream;
@@ -63,10 +63,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.ProcessBuilder.Redirect;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -186,8 +185,12 @@ public class ExecuteStreamCommand extends AbstractProcessor {
             .build();
     private final AtomicReference<Set<Relationship>> relationships = new AtomicReference<>();
 
-    private final static Set<Relationship> OUTPUT_STREAM_RELATIONSHIP_SET;
-    private final static Set<Relationship> ATTRIBUTE_RELATIONSHIP_SET;
+    private final static Set<Relationship> OUTPUT_STREAM_RELATIONSHIP_SET = Set.of(
+            OUTPUT_STREAM_RELATIONSHIP,
+            ORIGINAL_RELATIONSHIP,
+            NONZERO_STATUS_RELATIONSHIP
+    );
+    private final static Set<Relationship> ATTRIBUTE_RELATIONSHIP_SET = Set.of(ORIGINAL_RELATIONSHIP);
 
     private static final Pattern COMMAND_ARGUMENT_PATTERN = Pattern.compile("command\\.argument\\.(?<commandIndex>[0-9]+)$");
 
@@ -284,32 +287,19 @@ public class ExecuteStreamCommand extends AbstractProcessor {
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .build();
 
-    private static final List<PropertyDescriptor> PROPERTIES;
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(
+            WORKING_DIR,
+            EXECUTION_COMMAND,
+            ARGUMENTS_STRATEGY,
+            EXECUTION_ARGUMENTS,
+            ARG_DELIMITER,
+            IGNORE_STDIN,
+            PUT_OUTPUT_IN_ATTRIBUTE,
+            PUT_ATTRIBUTE_MAX_LENGTH,
+            MIME_TYPE
+    );
+
     private static final String MASKED_ARGUMENT = "********";
-
-    static {
-        List<PropertyDescriptor> props = new ArrayList<>();
-        props.add(WORKING_DIR);
-        props.add(EXECUTION_COMMAND);
-        props.add(ARGUMENTS_STRATEGY);
-        props.add(EXECUTION_ARGUMENTS);
-        props.add(ARG_DELIMITER);
-        props.add(IGNORE_STDIN);
-        props.add(PUT_OUTPUT_IN_ATTRIBUTE);
-        props.add(PUT_ATTRIBUTE_MAX_LENGTH);
-        props.add(MIME_TYPE);
-        PROPERTIES = Collections.unmodifiableList(props);
-
-        Set<Relationship> outputStreamRelationships = new HashSet<>();
-        outputStreamRelationships.add(OUTPUT_STREAM_RELATIONSHIP);
-        outputStreamRelationships.add(ORIGINAL_RELATIONSHIP);
-        outputStreamRelationships.add(NONZERO_STATUS_RELATIONSHIP);
-        OUTPUT_STREAM_RELATIONSHIP_SET = Collections.unmodifiableSet(outputStreamRelationships);
-
-        Set<Relationship> attributeRelationships = new HashSet<>();
-        attributeRelationships.add(ORIGINAL_RELATIONSHIP);
-        ATTRIBUTE_RELATIONSHIP_SET = Collections.unmodifiableSet(attributeRelationships);
-    }
 
     private ComponentLog logger;
 
@@ -476,10 +466,10 @@ public class ExecuteStreamCommand extends AbstractProcessor {
         } catch (IOException e) {
             try {
                 if (!errorOut.delete()) {
-                    logger.warn("Unable to delete file: " + errorOut.getAbsolutePath());
+                    logger.warn("Unable to delete file: {}", errorOut.getAbsolutePath());
                 }
             } catch (SecurityException se) {
-                logger.warn("Unable to delete file: '" + errorOut.getAbsolutePath() + "' due to " + se);
+                logger.warn("Unable to delete file: '{}'", errorOut.getAbsolutePath(), se);
             }
             logger.error("Could not create external process to run command", e);
             throw new ProcessException(e);
@@ -504,24 +494,20 @@ public class ExecuteStreamCommand extends AbstractProcessor {
 
             Map<String, String> attributes = new HashMap<>();
 
-            final StringBuilder strBldr = new StringBuilder();
-            try (final InputStream is = new FileInputStream(errorOut)) {
-                int c;
-                while ((c = is.read()) != -1) {
-                    strBldr.append((char) c);
-                }
-            } catch (IOException e) {
-                strBldr.append("Unknown...could not read Process's Std Error");
+            String stdErr = "";
+            try (final InputStream in = new BufferedInputStream(new LimitingInputStream(new FileInputStream(errorOut), 4000))) {
+                stdErr = IOUtils.toString(in, Charset.defaultCharset());
+            } catch (final Exception e) {
+                stdErr = "Unknown...could not read Process's Std Error due to " + e.getClass().getName() + ": " + e.getMessage();
             }
-            int length = Math.min(strBldr.length(), 4000);
-            attributes.put("execution.error", strBldr.substring(0, length));
+            attributes.put("execution.error", stdErr);
 
             final Relationship outputFlowFileRelationship = putToAttribute ? ORIGINAL_RELATIONSHIP : (exitCode != 0) ? NONZERO_STATUS_RELATIONSHIP : OUTPUT_STREAM_RELATIONSHIP;
             if (exitCode == 0) {
                 logger.info("Transferring {} to {}", outputFlowFile, outputFlowFileRelationship.getName());
             } else {
-                logger.error("Transferring {} to {}. Executable command {} ended in an error: {}",
-                        outputFlowFile, outputFlowFileRelationship.getName(), executeCommand, strBldr.toString());
+                logger.error("Transferring {} to {}. Executable command {} returned exitCode {} and error message: {}",
+                        outputFlowFile, outputFlowFileRelationship.getName(), executeCommand, exitCode, stdErr);
             }
 
             attributes.put("execution.status", Integer.toString(exitCode));
@@ -566,7 +552,6 @@ public class ExecuteStreamCommand extends AbstractProcessor {
         int exitCode;
         final boolean putToAttribute;
         final int attributeSize;
-        final String attributeName;
 
         byte[] outputBuffer;
         int size;
@@ -582,7 +567,6 @@ public class ExecuteStreamCommand extends AbstractProcessor {
             this.process = process;
             this.putToAttribute = putToAttribute;
             this.attributeSize = attributeSize;
-            this.attributeName = attributeName;
         }
 
         @Override

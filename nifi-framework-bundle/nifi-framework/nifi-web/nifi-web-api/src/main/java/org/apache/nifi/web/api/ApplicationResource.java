@@ -32,7 +32,10 @@ import org.apache.nifi.authorization.resource.Authorizable;
 import org.apache.nifi.authorization.user.NiFiUser;
 import org.apache.nifi.authorization.user.NiFiUserUtils;
 import org.apache.nifi.cluster.coordination.ClusterCoordinator;
+import org.apache.nifi.cluster.coordination.http.replication.RequestReplicationHeader;
 import org.apache.nifi.cluster.coordination.http.replication.RequestReplicator;
+import org.apache.nifi.cluster.coordination.node.NodeConnectionState;
+import org.apache.nifi.cluster.coordination.node.NodeConnectionStatus;
 import org.apache.nifi.cluster.exception.NoClusterCoordinatorException;
 import org.apache.nifi.cluster.manager.NodeResponse;
 import org.apache.nifi.cluster.manager.exception.IllegalClusterStateException;
@@ -46,6 +49,8 @@ import org.apache.nifi.remote.exception.HandshakeException;
 import org.apache.nifi.remote.exception.NotAuthorizedException;
 import org.apache.nifi.remote.protocol.ResponseCode;
 import org.apache.nifi.remote.protocol.http.HttpHeaders;
+import org.apache.nifi.security.cert.PeerIdentityProvider;
+import org.apache.nifi.security.cert.StandardPeerIdentityProvider;
 import org.apache.nifi.util.ComponentIdGenerator;
 import org.apache.nifi.util.NiFiProperties;
 import org.apache.nifi.web.NiFiServiceFacade;
@@ -63,8 +68,8 @@ import org.apache.nifi.web.api.entity.Entity;
 import org.apache.nifi.web.api.entity.TransactionResultEntity;
 import org.apache.nifi.web.security.ProxiedEntitiesUtils;
 import org.apache.nifi.web.security.util.CacheKey;
-import org.apache.nifi.web.util.RequestUriBuilder;
-import org.apache.nifi.web.util.WebUtils;
+import org.apache.nifi.web.servlet.shared.ProxyHeader;
+import org.apache.nifi.web.servlet.shared.RequestUriBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -79,9 +84,14 @@ import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.Response.ResponseBuilder;
 import jakarta.ws.rs.core.UriBuilder;
 import jakarta.ws.rs.core.UriInfo;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.context.SecurityContextHolder;
 
+import javax.net.ssl.SSLPeerUnverifiedException;
+import java.net.HttpURLConnection;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.security.cert.X509Certificate;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -94,17 +104,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static jakarta.ws.rs.core.Response.Status.NOT_FOUND;
 import static org.apache.commons.lang3.StringUtils.isEmpty;
 import static org.apache.nifi.remote.protocol.http.HttpHeaders.LOCATION_URI_INTENT_NAME;
 import static org.apache.nifi.remote.protocol.http.HttpHeaders.LOCATION_URI_INTENT_VALUE;
-import static org.apache.nifi.web.util.WebUtils.FORWARDED_HOST_HTTP_HEADER;
-import static org.apache.nifi.web.util.WebUtils.FORWARDED_PORT_HTTP_HEADER;
-import static org.apache.nifi.web.util.WebUtils.FORWARDED_PROTO_HTTP_HEADER;
-import static org.apache.nifi.web.util.WebUtils.PROXY_HOST_HTTP_HEADER;
-import static org.apache.nifi.web.util.WebUtils.PROXY_PORT_HTTP_HEADER;
-import static org.apache.nifi.web.util.WebUtils.PROXY_SCHEME_HTTP_HEADER;
 
 /**
  * Base class for controllers.
@@ -129,7 +134,8 @@ public abstract class ApplicationResource {
     @Context
     protected UriInfo uriInfo;
 
-    protected ApplicationCookieService applicationCookieService = new StandardApplicationCookieService();
+    protected final PeerIdentityProvider peerIdentityProvider = new StandardPeerIdentityProvider();
+    protected final ApplicationCookieService applicationCookieService = new StandardApplicationCookieService();
     protected NiFiProperties properties;
     private RequestReplicator requestReplicator;
     private ClusterCoordinator clusterCoordinator;
@@ -157,6 +163,21 @@ public abstract class ApplicationResource {
     protected URI getCookieResourceUri() {
         final UriBuilder uriBuilder = uriInfo.getBaseUriBuilder();
         return buildResourceUri(uriBuilder.replacePath(ROOT_PATH).build());
+    }
+
+    /**
+     * Generate a URI to an external UI.
+     *
+     * @param pathSegments path segments for the external UI
+     * @return the full external UI
+     */
+    protected String generateExternalUiUri(final String... pathSegments) {
+        final RequestUriBuilder builder = RequestUriBuilder.fromHttpServletRequest(httpServletRequest, properties.getAllowedContextPathsAsList());
+
+        final String path = String.join("/", pathSegments);
+        builder.path(path);
+
+        return builder.build().toString();
     }
 
     private URI buildResourceUri(final String... path) {
@@ -203,7 +224,7 @@ public abstract class ApplicationResource {
     }
 
     protected Optional<String> getIdGenerationSeed() {
-        final String idGenerationSeed = httpServletRequest.getHeader(RequestReplicator.CLUSTER_ID_GENERATION_SEED_HEADER);
+        final String idGenerationSeed = httpServletRequest.getHeader(RequestReplicationHeader.CLUSTER_ID_GENERATION_SEED.getHeader());
         if (StringUtils.isBlank(idGenerationSeed)) {
             return Optional.empty();
         }
@@ -244,22 +265,12 @@ public abstract class ApplicationResource {
     }
 
     /**
-     * Generates a 401 Not Authorized response with no content.
-     *
-     * @return The response to be built
-     */
-    protected ResponseBuilder generateNotAuthorizedResponse() {
-        // generate the response builder
-        return Response.status(HttpServletResponse.SC_UNAUTHORIZED);
-    }
-
-    /**
      * Generates a 202 Accepted (Node Continue) response to be used within the cluster request handshake.
      *
      * @return a 202 Accepted (Node Continue) response to be used within the cluster request handshake
      */
     protected ResponseBuilder generateContinueResponse() {
-        return Response.status(RequestReplicator.NODE_CONTINUE_STATUS_CODE);
+        return Response.status(HttpURLConnection.HTTP_ACCEPTED);
     }
 
     protected URI getAbsolutePath() {
@@ -308,36 +319,13 @@ public abstract class ApplicationResource {
             }
         }
 
-        // if the scheme is not set by the client, include the details from this request but don't override
-        final String proxyScheme = getFirstHeaderValue(PROXY_SCHEME_HTTP_HEADER, FORWARDED_PROTO_HTTP_HEADER);
-        if (proxyScheme == null) {
-            result.put(PROXY_SCHEME_HTTP_HEADER, httpServletRequest.getScheme());
-        }
-
-        // if the host is not set by the client, include the details from this request but don't override
-        final String proxyHost = getFirstHeaderValue(PROXY_HOST_HTTP_HEADER, FORWARDED_HOST_HTTP_HEADER);
-        if (proxyHost == null) {
-            result.put(PROXY_HOST_HTTP_HEADER, httpServletRequest.getServerName());
-        }
-
-        // if the port is not set by the client, include the details from this request but don't override
-        final String proxyPort = getFirstHeaderValue(PROXY_PORT_HTTP_HEADER, FORWARDED_PORT_HTTP_HEADER);
-        if (proxyPort == null) {
-            result.put(PROXY_PORT_HTTP_HEADER, String.valueOf(httpServletRequest.getServerPort()));
-        }
+        final URI requestUri = RequestUriBuilder.fromHttpServletRequest(httpServletRequest).build();
+        // Set Proxy Headers based on resolved URI from supported values
+        result.put(ProxyHeader.PROXY_SCHEME.getHeader(), requestUri.getScheme());
+        result.put(ProxyHeader.PROXY_HOST.getHeader(), requestUri.getHost());
+        result.put(ProxyHeader.PROXY_PORT.getHeader(), Integer.toString(requestUri.getPort()));
 
         return result;
-    }
-
-    /**
-     * Returns the value for the first key discovered when inspecting the current request. Will
-     * return null if there are no keys specified or if none of the specified keys are found.
-     *
-     * @param keys http header keys
-     * @return the value for the first key found
-     */
-    private String getFirstHeaderValue(final String... keys) {
-        return WebUtils.getFirstHeaderValue(httpServletRequest, keys);
     }
 
     /**
@@ -347,7 +335,7 @@ public abstract class ApplicationResource {
      * @return <code>true</code> if the request represents a two-phase commit style request
      */
     protected boolean isTwoPhaseRequest(final HttpServletRequest httpServletRequest) {
-        final String transactionId = httpServletRequest.getHeader(RequestReplicator.REQUEST_TRANSACTION_ID_HEADER);
+        final String transactionId = httpServletRequest.getHeader(RequestReplicationHeader.REQUEST_TRANSACTION_ID.getHeader());
         return transactionId != null && isClustered();
     }
 
@@ -355,26 +343,26 @@ public abstract class ApplicationResource {
      * When a two-phase commit style request is used, the first phase (generally referred to
      * as the "commit-request stage") is intended to validate that the request can be completed.
      * In NiFi, we use this phase to validate that the request can complete. This method determines
-     * whether or not the request is the first phase of a two-phase commit.
+     * whether the request is the first phase of a two-phase commit.
      *
      * @param httpServletRequest the request
      * @return <code>true</code> if the request represents a two-phase commit style request and is the
      * first of the two phases.
      */
     protected boolean isValidationPhase(final HttpServletRequest httpServletRequest) {
-        return isTwoPhaseRequest(httpServletRequest) && httpServletRequest.getHeader(RequestReplicator.REQUEST_VALIDATION_HTTP_HEADER) != null;
+        return isTwoPhaseRequest(httpServletRequest) && httpServletRequest.getHeader(RequestReplicationHeader.VALIDATION_EXPECTS.getHeader()) != null;
     }
 
     protected boolean isExecutionPhase(final HttpServletRequest httpServletRequest) {
-        return isTwoPhaseRequest(httpServletRequest) && httpServletRequest.getHeader(RequestReplicator.REQUEST_EXECUTION_HTTP_HEADER) != null;
+        return isTwoPhaseRequest(httpServletRequest) && httpServletRequest.getHeader(RequestReplicationHeader.EXECUTION_CONTINUE.getHeader()) != null;
     }
 
     protected boolean isCancellationPhase(final HttpServletRequest httpServletRequest) {
-        return isTwoPhaseRequest(httpServletRequest) && httpServletRequest.getHeader(RequestReplicator.REQUEST_TRANSACTION_CANCELATION_HTTP_HEADER) != null;
+        return isTwoPhaseRequest(httpServletRequest) && httpServletRequest.getHeader(RequestReplicationHeader.CANCEL_TRANSACTION.getHeader()) != null;
     }
 
     /**
-     * Checks whether or not the request should be replicated to the cluster
+     * Checks whether the request should be replicated to the cluster
      *
      * @return <code>true</code> if the request should be replicated, <code>false</code> otherwise
      */
@@ -386,14 +374,14 @@ public abstract class ApplicationResource {
 
         ensureFlowInitialized();
 
-        // If not connected to the cluster, we do not replicate
-        if (!isConnectedToCluster()) {
+        // If not connected or not connecting to the cluster, we do not replicate
+        if (!isConnectedToCluster() && !isConnectingToCluster()) {
             return false;
         }
 
-        // Check if the X-Request-Replicated header is set. If so, the request has already been replicated,
+        // Check if the replicated header is set. If so, the request has already been replicated,
         // so we need to service the request locally. If not, then replicate the request to the entire cluster.
-        final String header = httpServletRequest.getHeader(RequestReplicator.REPLICATION_INDICATOR_HEADER);
+        final String header = httpServletRequest.getHeader(RequestReplicationHeader.REQUEST_REPLICATED.getHeader());
         return header == null;
     }
 
@@ -698,7 +686,7 @@ public abstract class ApplicationResource {
         }
 
         // get the transaction id
-        final String transactionId = httpServletRequest.getHeader(RequestReplicator.REQUEST_TRANSACTION_ID_HEADER);
+        final String transactionId = httpServletRequest.getHeader(RequestReplicationHeader.REQUEST_TRANSACTION_ID.getHeader());
         if (StringUtils.isBlank(transactionId)) {
             throw new IllegalArgumentException("Two phase commit Transaction Id missing.");
         }
@@ -718,7 +706,7 @@ public abstract class ApplicationResource {
 
     private <T extends Entity> Request<T> phaseTwoVerifyTransaction() {
         // get the transaction id
-        final String transactionId = httpServletRequest.getHeader(RequestReplicator.REQUEST_TRANSACTION_ID_HEADER);
+        final String transactionId = httpServletRequest.getHeader(RequestReplicationHeader.REQUEST_TRANSACTION_ID.getHeader());
         if (StringUtils.isBlank(transactionId)) {
             throw new IllegalArgumentException("Two phase commit Transaction Id missing.");
         }
@@ -754,7 +742,7 @@ public abstract class ApplicationResource {
 
     private void cancelTransaction() {
         // get the transaction id
-        final String transactionId = httpServletRequest.getHeader(RequestReplicator.REQUEST_TRANSACTION_ID_HEADER);
+        final String transactionId = httpServletRequest.getHeader(RequestReplicationHeader.REQUEST_TRANSACTION_ID.getHeader());
         if (StringUtils.isBlank(transactionId)) {
             throw new IllegalArgumentException("Two phase commit Transaction Id missing.");
         }
@@ -847,7 +835,7 @@ public abstract class ApplicationResource {
      * @throws UnknownNodeException if the nodeUuid given does not map to any node in the cluster
      */
     protected Response replicate(final URI path, final String method, final Object entity, final String nodeUuid, final Map<String, String> headersToOverride) {
-        // since we're cluster we must specify the cluster node identifier
+        // since we're in a cluster we must specify the cluster node identifier
         if (nodeUuid == null) {
             throw new IllegalArgumentException("The cluster node identifier must be specified.");
         }
@@ -870,7 +858,7 @@ public abstract class ApplicationResource {
                 final Set<NodeIdentifier> targetNodes = Collections.singleton(nodeId);
                 return requestReplicator.replicate(targetNodes, method, path, entity, headers, true, true).awaitMergedResponse().getResponse();
             } else {
-                headers.put(RequestReplicator.REPLICATION_TARGET_NODE_UUID_HEADER, nodeId.getId());
+                headers.put(RequestReplicationHeader.REPLICATION_TARGET_ID.getHeader(), nodeId.getId());
                 return requestReplicator.forwardToCoordinator(getClusterCoordinatorNode(), method, path, entity, headers).awaitMergedResponse().getResponse();
             }
         } catch (final InterruptedException ie) {
@@ -915,7 +903,7 @@ public abstract class ApplicationResource {
                 final Set<NodeIdentifier> nodeIds = Collections.singleton(targetNode);
                 return getRequestReplicator().replicate(nodeIds, method, getAbsolutePath(), entity, getHeaders(), true, true).awaitMergedResponse().getResponse();
             } else {
-                final Map<String, String> headers = getHeaders(Collections.singletonMap(RequestReplicator.REPLICATION_TARGET_NODE_UUID_HEADER, targetNode.getId()));
+                final Map<String, String> headers = getHeaders(Collections.singletonMap(RequestReplicationHeader.REPLICATION_TARGET_ID.getHeader(), targetNode.getId()));
                 return requestReplicator.forwardToCoordinator(getClusterCoordinatorNode(), method, getAbsolutePath(), entity, headers).awaitMergedResponse().getResponse();
             }
         } catch (final InterruptedException ie) {
@@ -1028,7 +1016,7 @@ public abstract class ApplicationResource {
             }
         } finally {
             final long replicateNanos = System.nanoTime() - replicateStart;
-            final String transactionId = headers.get(RequestReplicator.REQUEST_TRANSACTION_ID_HEADER);
+            final String transactionId = headers.get(RequestReplicationHeader.REQUEST_TRANSACTION_ID.getHeader());
             final String requestId = transactionId == null ? "Request with no ID" : transactionId;
             logger.debug("Took a total of {} millis to {} for {}", TimeUnit.NANOSECONDS.toMillis(replicateNanos), action, requestId);
         }
@@ -1040,6 +1028,16 @@ public abstract class ApplicationResource {
      */
     boolean isConnectedToCluster() {
         return isClustered() && clusterCoordinator.isConnected();
+    }
+
+    boolean isConnectingToCluster() {
+        if (!isClustered()) {
+            return false;
+        }
+
+        final NodeIdentifier nodeId = clusterCoordinator.getLocalNodeIdentifier();
+        final NodeConnectionStatus nodeConnectionStatus = clusterCoordinator.getConnectionStatus(nodeId);
+        return nodeConnectionStatus != null && nodeConnectionStatus.getState() == NodeConnectionState.CONNECTING;
     }
 
     boolean isClustered() {
@@ -1057,6 +1055,7 @@ public abstract class ApplicationResource {
         }
     }
 
+    @Autowired
     public void setRequestReplicator(final RequestReplicator requestReplicator) {
         this.requestReplicator = requestReplicator;
     }
@@ -1067,10 +1066,12 @@ public abstract class ApplicationResource {
         return requestReplicator;
     }
 
+    @Autowired
     public void setProperties(final NiFiProperties properties) {
         this.properties = properties;
     }
 
+    @Autowired
     public void setClusterCoordinator(final ClusterCoordinator clusterCoordinator) {
         this.clusterCoordinator = clusterCoordinator;
     }
@@ -1079,6 +1080,7 @@ public abstract class ApplicationResource {
         return clusterCoordinator;
     }
 
+    @Autowired
     public void setFlowController(final FlowController flowController) {
         this.flowController = flowController;
     }
@@ -1284,5 +1286,53 @@ public abstract class ApplicationResource {
         if (referencingEntities != null) {
             referencingEntities.forEach(this::stripNonUiRelevantFields);
         }
+    }
+
+    /**
+     * @return true if the credentials of the current request contain a certificate that matches an identity of a known cluster node, false otherwise
+     */
+    protected boolean isRequestFromClusterNode() {
+        final ClusterCoordinator clusterCoordinator = getClusterCoordinator();
+        if (clusterCoordinator == null) {
+            logger.debug("Clustering is not configured");
+            return false;
+        }
+
+        final X509Certificate[] certificates = getAuthenticationCertificates();
+        if (certificates == null) {
+            logger.debug("Client credentials do not contain certificates");
+            return false;
+        }
+
+        final Set<String> clientIdentities;
+        try {
+            clientIdentities = peerIdentityProvider.getIdentities(certificates);
+        } catch (final SSLPeerUnverifiedException e) {
+            throw new RuntimeException("Unable to get identities from client certificates", e);
+        }
+
+        final Set<String> nodeIds = getClusterCoordinator().getNodeIdentifiers().stream()
+                .map(NodeIdentifier::getApiAddress)
+                .collect(Collectors.toSet());
+
+        logger.debug("Checking client identities [{}] against cluster node identities [{}]", clientIdentities, nodeIds);
+
+        for (final String clientIdentity : clientIdentities) {
+            if (nodeIds.contains(clientIdentity)) {
+                logger.debug("Client identity [{}] is in the list of cluster nodes", clientIdentity);
+                return true;
+            }
+        }
+
+        logger.debug("None of the client identities [{}] are in the list of cluster nodes", clientIdentities);
+        return false;
+    }
+
+    private X509Certificate[] getAuthenticationCertificates() {
+        final Object credentials = SecurityContextHolder.getContext().getAuthentication().getCredentials();
+        if (credentials instanceof X509Certificate[]) {
+            return (X509Certificate[]) credentials;
+        }
+        return null;
     }
 }

@@ -16,16 +16,7 @@
  */
 package org.apache.nifi.processors.standard;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
-import java.util.regex.Pattern;
-
 import jakarta.servlet.http.HttpServletResponse;
-
 import org.apache.nifi.annotation.behavior.DynamicProperty;
 import org.apache.nifi.annotation.behavior.InputRequirement;
 import org.apache.nifi.annotation.behavior.InputRequirement.Requirement;
@@ -46,6 +37,12 @@ import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.processors.standard.util.HTTPUtils;
 import org.apache.nifi.util.StopWatch;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 @InputRequirement(Requirement.INPUT_REQUIRED)
 @Tags({"http", "https", "response", "egress", "web service"})
@@ -85,6 +82,12 @@ public class HandleHttpResponse extends AbstractProcessor {
             .required(false)
             .build();
 
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(
+            STATUS_CODE,
+            HTTP_CONTEXT_MAP,
+            ATTRIBUTES_AS_HEADERS_REGEX
+    );
+
     public static final Relationship REL_SUCCESS = new Relationship.Builder()
             .name("success")
             .description("FlowFiles will be routed to this Relationship after the response has been successfully sent to the requestor")
@@ -95,21 +98,16 @@ public class HandleHttpResponse extends AbstractProcessor {
                     + "for instance, if the connection times out or if NiFi is restarted before responding to the HTTP Request.")
             .build();
 
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(REL_SUCCESS, REL_FAILURE);
+
     @Override
     public final List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        final List<PropertyDescriptor> properties = new ArrayList<>();
-        properties.add(STATUS_CODE);
-        properties.add(HTTP_CONTEXT_MAP);
-        properties.add(ATTRIBUTES_AS_HEADERS_REGEX);
-        return properties;
+        return PROPERTIES;
     }
 
     @Override
     public Set<Relationship> getRelationships() {
-        final Set<Relationship> relationships = new HashSet<>();
-        relationships.add(REL_SUCCESS);
-        relationships.add(REL_FAILURE);
-        return relationships;
+        return RELATIONSHIPS;
     }
 
     @Override
@@ -134,15 +132,14 @@ public class HandleHttpResponse extends AbstractProcessor {
 
         final String contextIdentifier = flowFile.getAttribute(HTTPUtils.HTTP_CONTEXT_ID);
         if (contextIdentifier == null) {
-            getLogger().warn("Failed to respond to HTTP request for {} because FlowFile did not have an '" + HTTPUtils.HTTP_CONTEXT_ID + "' attribute",
-                    new Object[]{flowFile});
+            getLogger().warn("Failed to respond to HTTP request for {} because FlowFile did not have an '{}' attribute", flowFile, HTTPUtils.HTTP_CONTEXT_ID);
             session.transfer(flowFile, REL_FAILURE);
             return;
         }
 
         final String statusCodeValue = context.getProperty(STATUS_CODE).evaluateAttributeExpressions(flowFile).getValue();
         if (!isNumber(statusCodeValue)) {
-            getLogger().error("Failed to respond to HTTP request for {} because status code was '{}', which is not a valid number", new Object[]{flowFile, statusCodeValue});
+            getLogger().error("Failed to respond to HTTP request for {} because status code was '{}', which is not a valid number", flowFile, statusCodeValue);
             session.transfer(flowFile, REL_FAILURE);
             return;
         }
@@ -190,16 +187,16 @@ public class HandleHttpResponse extends AbstractProcessor {
             session.exportTo(flowFile, response.getOutputStream());
             response.flushBuffer();
         } catch (final ProcessException e) {
-            getLogger().error("Failed to respond to HTTP request for {} due to {}", new Object[]{flowFile, e});
+            getLogger().error("Failed to respond to HTTP request for {}", flowFile, e);
             try {
                 contextMap.complete(contextIdentifier);
             } catch (final RuntimeException ce) {
-                getLogger().error("Failed to complete HTTP Transaction for {} due to {}", new Object[]{flowFile, ce});
+                getLogger().error("Failed to complete HTTP Transaction for {}", flowFile, ce);
             }
             session.transfer(flowFile, REL_FAILURE);
             return;
         } catch (final Exception e) {
-            getLogger().error("Failed to respond to HTTP request for {} due to {}", new Object[]{flowFile, e});
+            getLogger().error("Failed to respond to HTTP request for {}", flowFile, e);
             session.transfer(flowFile, REL_FAILURE);
             return;
         }
@@ -207,18 +204,18 @@ public class HandleHttpResponse extends AbstractProcessor {
         try {
             contextMap.complete(contextIdentifier);
         } catch (final RuntimeException ce) {
-            getLogger().error("Failed to complete HTTP Transaction for {} due to {}", new Object[]{flowFile, ce});
+            getLogger().error("Failed to complete HTTP Transaction for {}", flowFile, ce);
             session.transfer(flowFile, REL_FAILURE);
             return;
         }
 
         session.getProvenanceReporter().send(flowFile, HTTPUtils.getURI(flowFile.getAttributes()), stopWatch.getElapsed(TimeUnit.MILLISECONDS));
-        getLogger().info("Successfully responded to HTTP Request for {} with status code {}", new Object[]{flowFile, statusCode});
+        getLogger().info("Successfully responded to HTTP Request for {} with status code {}", flowFile, statusCode);
         session.transfer(flowFile, REL_SUCCESS);
     }
 
     private static boolean isNumber(final String value) {
-        if (value.length() == 0) {
+        if (value.isEmpty()) {
             return false;
         }
 

@@ -239,7 +239,7 @@ public class ExecuteGraphQueryRecord extends  AbstractGraphExecutor {
 
                     dynamicPropertyMap.putAll(input.getAttributes());
                     if (getLogger().isDebugEnabled()) {
-                        getLogger().debug("Dynamic Properties: {}", new Object[]{dynamicPropertyMap});
+                        getLogger().debug("Dynamic Properties: {}", dynamicPropertyMap);
                     }
                     List<Map<String, Object>> graphResponses = new ArrayList<>(executeQuery(recordScript, dynamicPropertyMap));
 
@@ -249,7 +249,7 @@ public class ExecuteGraphQueryRecord extends  AbstractGraphExecutor {
                     graphOutputStream.close();
                     session.transfer(graph, GRAPH);
                 } catch (Exception e) {
-                    getLogger().error("Error processing record at index " + records, e);
+                    getLogger().error("Error processing record at index {}", records, e);
                     // write failed records to a flowfile destined for the failure relationship
                     failedWriter.write(record);
                     session.remove(graph);

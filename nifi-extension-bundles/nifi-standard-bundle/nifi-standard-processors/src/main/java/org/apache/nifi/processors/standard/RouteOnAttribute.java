@@ -41,12 +41,9 @@ import org.apache.nifi.logging.ComponentLog;
 import org.apache.nifi.processor.AbstractProcessor;
 import org.apache.nifi.processor.ProcessContext;
 import org.apache.nifi.processor.ProcessSession;
-import org.apache.nifi.processor.ProcessorInitializationContext;
 import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.processor.util.StandardValidators;
 
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -195,6 +192,8 @@ public class RouteOnAttribute extends AbstractProcessor {
             .defaultValue(ROUTE_PROPERTY_NAME.getValue())
             .build();
 
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(ROUTE_STRATEGY);
+
     public static final Relationship REL_NO_MATCH = new Relationship.Builder()
             .name("unmatched")
             .description("FlowFiles that do not match any user-define expression will be routed here")
@@ -204,8 +203,7 @@ public class RouteOnAttribute extends AbstractProcessor {
             .description("FlowFiles will be routed to 'match' if one or all Expressions match, depending on the configuration of the Routing Strategy property")
             .build();
 
-    private AtomicReference<Set<Relationship>> relationships = new AtomicReference<>();
-    private List<PropertyDescriptor> properties;
+    private final AtomicReference<Set<Relationship>> relationships = new AtomicReference<>(Set.of(REL_NO_MATCH));
     private volatile String configuredRouteStrategy = ROUTE_STRATEGY.getDefaultValue();
     private volatile Set<String> dynamicPropertyNames = new HashSet<>();
 
@@ -216,24 +214,13 @@ public class RouteOnAttribute extends AbstractProcessor {
     private volatile Map<Relationship, PropertyValue> propertyMap = new HashMap<>();
 
     @Override
-    protected void init(final ProcessorInitializationContext context) {
-        final Set<Relationship> set = new HashSet<>();
-        set.add(REL_NO_MATCH);
-        relationships = new AtomicReference<>(set);
-
-        final List<PropertyDescriptor> properties = new ArrayList<>();
-        properties.add(ROUTE_STRATEGY);
-        this.properties = Collections.unmodifiableList(properties);
-    }
-
-    @Override
     public Set<Relationship> getRelationships() {
         return relationships.get();
     }
 
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        return properties;
+        return PROPERTIES;
     }
 
     @Override
@@ -259,7 +246,7 @@ public class RouteOnAttribute extends AbstractProcessor {
                 newDynamicPropertyNames.add(descriptor.getName());
             }
 
-            this.dynamicPropertyNames = Collections.unmodifiableSet(newDynamicPropertyNames);
+            this.dynamicPropertyNames = Set.copyOf(newDynamicPropertyNames);
         }
 
         // formulate the new set of Relationships
@@ -290,7 +277,7 @@ public class RouteOnAttribute extends AbstractProcessor {
             if (!descriptor.isDynamic()) {
                 continue;
             }
-            getLogger().debug("Adding new dynamic property: {}", new Object[]{descriptor});
+            getLogger().debug("Adding new dynamic property: {}", descriptor);
             newPropertyMap.put(new Relationship.Builder().name(descriptor.getName()).build(), context.getProperty(descriptor));
         }
 
@@ -341,7 +328,7 @@ public class RouteOnAttribute extends AbstractProcessor {
         }
 
         if (destinationRelationships.isEmpty()) {
-            logger.info("Routing {} to unmatched", new Object[] {flowFile});
+            logger.info("Routing {} to unmatched", flowFile);
             flowFile = session.putAttribute(flowFile, ROUTE_ATTRIBUTE_KEY, REL_NO_MATCH.getName());
             session.getProvenanceReporter().route(flowFile, REL_NO_MATCH);
             session.transfer(flowFile, REL_NO_MATCH);
@@ -349,26 +336,24 @@ public class RouteOnAttribute extends AbstractProcessor {
             final Iterator<Relationship> relationshipNameIterator = destinationRelationships.iterator();
             final Relationship firstRelationship = relationshipNameIterator.next();
             final Map<Relationship, FlowFile> transferMap = new HashMap<>();
-            final Set<FlowFile> clones = new HashSet<>();
 
             // make all the clones for any remaining relationships
             while (relationshipNameIterator.hasNext()) {
                 final Relationship relationship = relationshipNameIterator.next();
                 final FlowFile cloneFlowFile = session.clone(flowFile);
-                clones.add(cloneFlowFile);
                 transferMap.put(relationship, cloneFlowFile);
             }
 
             // now transfer any clones generated
             for (final Map.Entry<Relationship, FlowFile> entry : transferMap.entrySet()) {
-                logger.info("Cloned {} into {} and routing clone to relationship {}", new Object[] {flowFile, entry.getValue(), entry.getKey()});
+                logger.info("Cloned {} into {} and routing clone to relationship {}", flowFile, entry.getValue(), entry.getKey());
                 FlowFile updatedFlowFile = session.putAttribute(entry.getValue(), ROUTE_ATTRIBUTE_KEY, entry.getKey().getName());
                 session.getProvenanceReporter().route(updatedFlowFile, entry.getKey());
                 session.transfer(updatedFlowFile, entry.getKey());
             }
 
             //now transfer the original flow file
-            logger.info("Routing {} to {}", new Object[]{flowFile, firstRelationship});
+            logger.info("Routing {} to {}", flowFile, firstRelationship);
             session.getProvenanceReporter().route(flowFile, firstRelationship);
             flowFile = session.putAttribute(flowFile, ROUTE_ATTRIBUTE_KEY, firstRelationship.getName());
             session.transfer(flowFile, firstRelationship);

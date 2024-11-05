@@ -17,24 +17,6 @@
 package org.apache.nifi.web.api;
 
 import com.google.common.base.Functions;
-
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
-import java.util.stream.Collectors;
-
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -43,6 +25,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.annotation.PostConstruct;
 import jakarta.servlet.ServletContext;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
@@ -125,10 +108,31 @@ import org.apache.nifi.web.util.LifecycleManagementException;
 import org.apache.nifi.web.util.ParameterUpdateManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.stereotype.Controller;
+
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 /**
  * RESTful endpoint for managing a Parameter Provider.
  */
+@Controller
 @Path("/parameter-providers")
 @Tag(name = "ParameterProviders")
 public class ParameterProviderResource extends AbstractParameterResource {
@@ -152,6 +156,7 @@ public class ParameterProviderResource extends AbstractParameterResource {
     @Context
     private ServletContext servletContext;
 
+    @PostConstruct
     public void init() {
         parameterUpdateManager = new ParameterUpdateManager(serviceFacade, dtoFactory, authorizer, this);
     }
@@ -211,7 +216,7 @@ public class ParameterProviderResource extends AbstractParameterResource {
             final List<UiExtension> uiExtensions = uiExtensionMapping.getUiExtension(parameterProvider.getType(), bundle.getGroup(), bundle.getArtifact(), bundle.getVersion());
             for (final UiExtension uiExtension : uiExtensions) {
                 if (UiExtensionType.ParameterProviderConfiguration.equals(uiExtension.getExtensionType())) {
-                    parameterProvider.setCustomUiUrl(uiExtension.getContextPath() + "/configure");
+                    parameterProvider.setCustomUiUrl(generateExternalUiUri(uiExtension.getContextPath()));
                 }
             }
         }
@@ -1687,28 +1692,24 @@ public class ParameterProviderResource extends AbstractParameterResource {
         }
     }
 
-    // setters
-
-    public void setServiceFacade(NiFiServiceFacade serviceFacade) {
+    @Autowired
+    public void setServiceFacade(final NiFiServiceFacade serviceFacade) {
         this.serviceFacade = serviceFacade;
     }
 
+    @Autowired
     public void setAuthorizer(final Authorizer authorizer) {
         this.authorizer = authorizer;
     }
 
-    public ComponentLifecycle getClusterComponentLifecycle() {
-        return clusterComponentLifecycle;
-    }
-
+    @Qualifier("clusterComponentLifecycle")
+    @Autowired(required = false)
     public void setClusterComponentLifecycle(final ComponentLifecycle clusterComponentLifecycle) {
         this.clusterComponentLifecycle = clusterComponentLifecycle;
     }
 
-    public ComponentLifecycle getLocalComponentLifecycle() {
-        return localComponentLifecycle;
-    }
-
+    @Qualifier("localComponentLifecycle")
+    @Autowired
     public void setLocalComponentLifecycle(final ComponentLifecycle localComponentLifecycle) {
         this.localComponentLifecycle = localComponentLifecycle;
     }
@@ -1717,7 +1718,8 @@ public class ParameterProviderResource extends AbstractParameterResource {
         return dtoFactory;
     }
 
-    public void setDtoFactory(DtoFactory dtoFactory) {
+    @Autowired
+    public void setDtoFactory(final DtoFactory dtoFactory) {
         this.dtoFactory = dtoFactory;
     }
 }

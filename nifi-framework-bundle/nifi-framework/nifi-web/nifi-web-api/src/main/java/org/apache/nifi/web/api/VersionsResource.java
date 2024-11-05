@@ -85,7 +85,9 @@ import org.apache.nifi.web.api.request.LongParameter;
 import org.apache.nifi.web.util.ComponentLifecycle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Controller;
 
+@Controller
 @Path("/versions")
 @Tag(name = "Versions")
 public class VersionsResource extends FlowUpdateResource<VersionControlInformationEntity, VersionedFlowUpdateRequestEntity> {
@@ -628,8 +630,8 @@ public class VersionsResource extends FlowUpdateResource<VersionControlInformati
         }
 
         if (clusterResponse.getStatus() != Status.OK.getStatusCode()) {
-            logger.error("After starting Version Control on Process Group with ID " + groupId + ", failed to delete Version Control Request. "
-                    + "Users may be unable to Version Control other Process Groups until the request lock times out. Response status code was " + clusterResponse.getStatus());
+            logger.error("After starting Version Control on Process Group with ID {}, failed to delete Version Control Request. "
+                    + "Users may be unable to Version Control other Process Groups until the request lock times out. Response status code was {}", groupId, clusterResponse.getStatus());
         }
     }
 

@@ -59,7 +59,7 @@ import static org.apache.nifi.processors.aws.util.RegionUtilV1.S3_REGION;
         @WritesAttribute(attribute = "s3.statusCode", description = "The HTTP error code (if available) from the failed operation"),
         @WritesAttribute(attribute = "s3.errorCode", description = "The S3 moniker of the failed operation"),
         @WritesAttribute(attribute = "s3.errorMessage", description = "The S3 exception message from the failed operation")})
-@SeeAlso({PutS3Object.class, FetchS3Object.class, ListS3.class})
+@SeeAlso({PutS3Object.class, FetchS3Object.class, ListS3.class, CopyS3Object.class, GetS3ObjectMetadata.class, DeleteS3Object.class})
 @Tags({"Amazon", "S3", "AWS", "Archive", "Tag"})
 @InputRequirement(Requirement.INPUT_REQUIRED)
 @CapabilityDescription("Adds or updates a tag on an Amazon S3 Object.")
@@ -195,7 +195,7 @@ public class TagS3Object extends AbstractS3Processor {
                 r = new SetObjectTaggingRequest(bucket, key, version, new ObjectTagging(tags));
             }
             s3.setObjectTagging(r);
-        } catch (final AmazonServiceException ase) {
+        } catch (final IllegalArgumentException | AmazonServiceException ase) {
             flowFile = extractExceptionDetails(ase, session, flowFile);
             getLogger().error("Failed to tag S3 Object for {}; routing to failure", flowFile, ase);
             flowFile = session.penalize(flowFile);

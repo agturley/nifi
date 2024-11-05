@@ -58,7 +58,10 @@ import org.slf4j.LoggerFactory;
 import jakarta.ws.rs.HttpMethod;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.Response.Status;
+
+import java.io.Closeable;
 import java.io.IOException;
+import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -89,20 +92,20 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-public class ThreadPoolRequestReplicator implements RequestReplicator {
+public class ThreadPoolRequestReplicator implements RequestReplicator, Closeable {
 
     private static final Logger logger = LoggerFactory.getLogger(ThreadPoolRequestReplicator.class);
     private static final Pattern SNIPPET_URI_PATTERN = Pattern.compile("/nifi-api/snippets/[a-f0-9\\-]{36}");
 
     private static final String COOKIE_HEADER = "Cookie";
     private static final String HOST_HEADER = "Host";
+    private static final String NODE_CONTINUE = "202-Accepted";
 
     private final int maxConcurrentRequests; // maximum number of concurrent requests
     private final HttpResponseMapper responseMapper;
     private final EventReporter eventReporter;
     private final RequestCompletionCallback callback;
     private final ClusterCoordinator clusterCoordinator;
-    private final NiFiProperties nifiProperties;
 
     private final ThreadPoolExecutor executorService;
     private final ScheduledExecutorService maintenanceExecutor;
@@ -141,7 +144,6 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
         this.responseMapper = new StandardHttpResponseMapper(nifiProperties);
         this.eventReporter = eventReporter;
         this.callback = callback;
-        this.nifiProperties = nifiProperties;
         this.httpClient = client;
 
         final AtomicInteger threadId = new AtomicInteger(0);
@@ -163,6 +165,11 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
         });
 
         maintenanceExecutor.scheduleWithFixedDelay(this::purgeExpiredRequests, 1, 1, TimeUnit.SECONDS);
+    }
+
+    @Override
+    public void close() {
+        shutdown();
     }
 
     @Override
@@ -250,11 +257,6 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
         // remove the access token if present, since the user is already authenticated... authorization
         // will happen when the request is replicated using the proxy chain above
         removeHeader(headers, SecurityHeader.AUTHORIZATION.getHeader());
-
-        // if knox sso cookie name is set, remove any authentication cookie since this user is already authenticated
-        // and will be included in the proxied entities chain above... authorization will happen when the
-        // request is replicated
-        removeCookie(headers, nifiProperties.getKnoxCookieName());
         removeCookie(headers, SecurityCookieName.AUTHORIZATION_BEARER.getName());
         removeCookie(headers, SecurityCookieName.REQUEST_TOKEN.getName());
 
@@ -274,9 +276,9 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
                                           final boolean indicateReplicated, final boolean performVerification) {
         final Map<String, String> updatedHeaders = new HashMap<>(headers);
 
-        updatedHeaders.put(RequestReplicator.CLUSTER_ID_GENERATION_SEED_HEADER, ComponentIdGenerator.generateId().toString());
+        updatedHeaders.put(RequestReplicationHeader.CLUSTER_ID_GENERATION_SEED.getHeader(), ComponentIdGenerator.generateId().toString());
         if (indicateReplicated) {
-            updatedHeaders.put(RequestReplicator.REPLICATION_INDICATOR_HEADER, "true");
+            updatedHeaders.put(RequestReplicationHeader.REQUEST_REPLICATED.getHeader(), Boolean.TRUE.toString());
         }
 
         // include the proxied entities header
@@ -378,7 +380,7 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
             // Update headers to indicate the current revision so that we can
             // prevent multiple users changing the flow at the same time
             final Map<String, String> updatedHeaders = new HashMap<>(headers);
-            final String requestId = updatedHeaders.computeIfAbsent(REQUEST_TRANSACTION_ID_HEADER, key -> UUID.randomUUID().toString());
+            final String requestId = computeRequestId(updatedHeaders);
 
             long verifyClusterStateNanos = -1;
             if (performVerification) {
@@ -456,7 +458,7 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
 
             // instruct the node to actually perform the underlying action
             if (mutableRequest && executionPhase) {
-                updatedHeaders.put(REQUEST_EXECUTION_HTTP_HEADER, "true");
+                updatedHeaders.put(RequestReplicationHeader.EXECUTION_CONTINUE.getHeader(), "true");
             }
 
             // replicate the request to all nodes
@@ -464,7 +466,7 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
             final Function<NodeIdentifier, NodeHttpRequest> requestFactory =
                 nodeId -> new NodeHttpRequest(request, nodeId, createURI(uri, nodeId), nodeCompletionCallback, finalResponse);
 
-            submitAsyncRequest(nodeIds, uri.getScheme(), uri.getPath(), requestFactory, updatedHeaders);
+            submitAsyncRequest(nodeIds, requestFactory);
 
             return response;
         } catch (final Throwable t) {
@@ -484,13 +486,16 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
         }
     }
 
+    private String computeRequestId(final Map<String, String> headers) {
+        return headers.computeIfAbsent(RequestReplicationHeader.REQUEST_TRANSACTION_ID.getHeader(), header -> UUID.randomUUID().toString());
+    }
 
     private void performVerification(final Set<NodeIdentifier> nodeIds, final String method, final URI uri, final Object entity, final Map<String, String> headers,
         final StandardAsyncClusterResponse clusterResponse, final boolean merge, final Object monitor) {
         logger.debug("Verifying that mutable request {} {} can be made", method, uri.getPath());
 
         final Map<String, String> validationHeaders = new HashMap<>(headers);
-        validationHeaders.put(REQUEST_VALIDATION_HTTP_HEADER, NODE_CONTINUE);
+        validationHeaders.put(RequestReplicationHeader.VALIDATION_EXPECTS.getHeader(), NODE_CONTINUE);
 
         final long startNanos = System.nanoTime();
         final int numNodes = nodeIds.size();
@@ -521,7 +526,7 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
                         clusterResponse.addTiming("Verification Completed", "All Nodes", nanos);
 
                         // Check if we have any requests that do not have a 202-Accepted status code.
-                        final long dissentingCount = nodeResponses.stream().filter(p -> p.getStatus() != NODE_CONTINUE_STATUS_CODE).count();
+                        final long dissentingCount = nodeResponses.stream().filter(p -> p.getStatus() != HttpURLConnection.HTTP_ACCEPTED).count();
 
                         // If all nodes responded with 202-Accepted, then we can replicate the original request
                         // to all nodes and we are finished.
@@ -533,18 +538,15 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
 
                         try {
                             final Map<String, String> cancelLockHeaders = new HashMap<>(headers);
-                            cancelLockHeaders.put(REQUEST_TRANSACTION_CANCELATION_HTTP_HEADER, "true");
-                            final Thread cancelLockThread = new Thread(new Runnable() {
-                                @Override
-                                public void run() {
-                                    logger.debug("Found {} dissenting nodes for {} {}; canceling claim request", dissentingCount, method, uri.getPath());
+                            cancelLockHeaders.put(RequestReplicationHeader.CANCEL_TRANSACTION.getHeader(), "true");
+                            final Thread cancelLockThread = new Thread(() -> {
+                                logger.debug("Found {} dissenting nodes for {} {}; canceling claim request", dissentingCount, method, uri.getPath());
 
-                                    final PreparedRequest request = httpClient.prepareRequest(method, cancelLockHeaders, entity);
-                                    final Function<NodeIdentifier, NodeHttpRequest> requestFactory =
-                                        nodeId -> new NodeHttpRequest(request, nodeId, createURI(uri, nodeId), null, clusterResponse);
+                                final PreparedRequest request = httpClient.prepareRequest(method, cancelLockHeaders, entity);
+                                final Function<NodeIdentifier, NodeHttpRequest> requestFactory =
+                                    nodeId -> new NodeHttpRequest(request, nodeId, createURI(uri, nodeId), null, clusterResponse);
 
-                                    submitAsyncRequest(nodeIds, uri.getScheme(), uri.getPath(), requestFactory, cancelLockHeaders);
-                                }
+                                submitAsyncRequest(nodeIds, requestFactory);
                             });
                             cancelLockThread.setName("Cancel Flow Locks");
                             cancelLockThread.start();
@@ -552,7 +554,7 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
                             // Add a NodeResponse for each node to the Cluster Response
                             // Check that all nodes responded successfully.
                             for (final NodeResponse response : nodeResponses) {
-                                if (response.getStatus() != NODE_CONTINUE_STATUS_CODE) {
+                                if (response.getStatus() != HttpURLConnection.HTTP_ACCEPTED) {
                                     final Response clientResponse = response.getClientResponse();
 
                                     final String message;
@@ -620,30 +622,23 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
             nodeId -> new NodeHttpRequest(request, nodeId, createURI(uri, nodeId), completionCallback, clusterResponse);
 
         // replicate the 'verification request' to all nodes
-        submitAsyncRequest(nodeIds, uri.getScheme(), uri.getPath(), requestFactory, validationHeaders);
+        submitAsyncRequest(nodeIds, requestFactory);
     }
 
 
     @Override
     public AsyncClusterResponse getClusterResponse(final String identifier) {
-        final AsyncClusterResponse response = responseMap.get(identifier);
-        if (response == null) {
-            return null;
-        }
-
-        return response;
+        return responseMap.get(identifier);
     }
 
     // Visible for testing - overriding this method makes it easy to verify behavior without actually making any web requests
     protected NodeResponse replicateRequest(final PreparedRequest request, final NodeIdentifier nodeId, final URI uri, final String requestId,
             final StandardAsyncClusterResponse clusterResponse) throws IOException {
 
-        final Response response;
         final long startNanos = System.nanoTime();
         logger.debug("Replicating request to {} {}, request ID = {}, headers = {}", request.getMethod(), uri, requestId, request.getHeaders());
 
-        // invoke the request
-        response = httpClient.replicate(request, uri.toString());
+        final Response response = httpClient.replicate(request, uri);
 
         final long nanos = System.nanoTime() - startNanos;
         clusterResponse.addTiming("Perform HTTP Request", nodeId.toString(), nanos);
@@ -662,14 +657,10 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
     }
 
     private boolean isMutableRequest(final String method) {
-        switch (method.toUpperCase()) {
-            case HttpMethod.GET:
-            case HttpMethod.HEAD:
-            case HttpMethod.OPTIONS:
-                return false;
-            default:
-                return true;
-        }
+        return switch (method.toUpperCase()) {
+            case HttpMethod.GET, HttpMethod.HEAD, HttpMethod.OPTIONS -> false;
+            default -> true;
+        };
     }
 
     private boolean isDeleteComponent(final String method, final String uriPath) {
@@ -682,7 +673,7 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
         // This is because we do need to allow deletion of asynchronous requests, such as updating parameters, querying provenance, etc.
         // which create a request, poll until the request completes, and then deletes it. Additionally, we want to allow terminating
         // Processors, which is done by issuing a request to DELETE /processors/<id>/threads
-        final boolean componentUri = ConnectionEndpointMerger.CONNECTION_URI_PATTERN.matcher(uriPath).matches()
+        return ConnectionEndpointMerger.CONNECTION_URI_PATTERN.matcher(uriPath).matches()
             || ProcessorEndpointMerger.PROCESSOR_URI_PATTERN.matcher(uriPath).matches()
             || FunnelEndpointMerger.FUNNEL_URI_PATTERN.matcher(uriPath).matches()
             || PortEndpointMerger.INPUT_PORT_URI_PATTERN.matcher(uriPath).matches()
@@ -697,8 +688,6 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
             || ParameterProviderEndpointMerger.PARAMETER_PROVIDER_URI_PATTERN.matcher(uriPath).matches()
             || FlowRegistryClientEndpointMerger.CONTROLLER_REGISTRY_URI_PATTERN.matcher(uriPath).matches()
             || SNIPPET_URI_PATTERN.matcher(uriPath).matches();
-
-        return componentUri;
     }
 
     /**
@@ -747,18 +736,20 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
      */
     private void onCompletedResponse(final String requestId) {
         final AsyncClusterResponse response = responseMap.get(requestId);
+        if (response == null) {
+            logger.info("Replicated Request [{}] not found", requestId);
+            return;
+        }
 
-        if (response != null && callback != null) {
+        if (callback != null) {
             try {
                 callback.afterRequest(response.getURIPath(), response.getMethod(), response.getCompletedNodeResponses());
             } catch (final Exception e) {
-                logger.warn("Completed request {} {} but failed to properly handle the Request Completion Callback due to {}",
-                        response.getMethod(), response.getURIPath(), e.toString());
-                logger.warn("", e);
+                logger.warn("Completed request {} {} but failed to properly handle the Request Completion Callback", response.getMethod(), response.getURIPath(), e);
             }
         }
 
-        if (response != null && logger.isDebugEnabled()) {
+        if (logger.isDebugEnabled()) {
             logTimingInfo(response);
         }
 
@@ -800,12 +791,11 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
 
         logger.debug("For {} {} (Request ID {}), minimum response time = {}, max = {}, average = {} ms",
                 response.getMethod(), response.getURIPath(), response.getRequestIdentifier(), stats.getMin(), stats.getMax(), stats.getAverage());
-        logger.debug(sb.toString());
+        logger.debug("{}", sb);
     }
 
 
-    private void submitAsyncRequest(final Set<NodeIdentifier> nodeIds, final String scheme, final String path,
-                                  final Function<NodeIdentifier, NodeHttpRequest> callableFactory, final Map<String, String> headers) {
+    private void submitAsyncRequest(final Set<NodeIdentifier> nodeIds, final Function<NodeIdentifier, NodeHttpRequest> callableFactory) {
 
         if (nodeIds.isEmpty()) {
             return; // return quickly for trivial case
@@ -864,14 +854,13 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
 
             try {
                 // create and send the request
-                final String requestId = request.getHeaders().get("x-nifi-request-id");
+                final String requestId = request.getHeaders().get(RequestReplicationHeader.REQUEST_TRANSACTION_ID.getHeader());
                 logger.debug("Replicating request {} {} to {}", method, uri.getPath(), nodeId);
 
                 nodeResponse = replicateRequest(request, nodeId, uri, requestId, clusterResponse);
             } catch (final Throwable t) {
                 nodeResponse = new NodeResponse(nodeId, method, uri, t);
-                logger.warn("Failed to replicate request {} {} to {} due to {}", method, uri.getPath(), nodeId, t.toString());
-                logger.warn("", t);
+                logger.warn("Failed to replicate request {} {} to {}", method, uri.getPath(), nodeId, t);
             }
 
             if (callback != null) {
@@ -881,7 +870,7 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
         }
     }
 
-    private static interface NodeRequestCompletionCallback {
+    private interface NodeRequestCompletionCallback {
         void onCompletion(NodeResponse nodeResponse);
     }
 
@@ -889,10 +878,10 @@ public class ThreadPoolRequestReplicator implements RequestReplicator {
         final Set<String> expiredRequestIds = ThreadPoolRequestReplicator.this.responseMap.entrySet().stream()
                 .filter(entry -> entry.getValue().isOlderThan(30, TimeUnit.SECONDS)) // older than 30 seconds
                 .filter(entry -> entry.getValue().isComplete()) // is complete
-                .map(entry -> entry.getKey()) // get the request id
+                .map(Map.Entry::getKey) // get the request id
                 .collect(Collectors.toSet());
 
-        expiredRequestIds.forEach(id -> onResponseConsumed(id));
+        expiredRequestIds.forEach(this::onResponseConsumed);
         return responseMap.size();
     }
 

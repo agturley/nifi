@@ -16,6 +16,7 @@
  */
 package org.apache.nifi.json;
 
+import com.fasterxml.jackson.core.StreamReadConstraints;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.apache.nifi.logging.ComponentLog;
 import org.apache.nifi.schema.inference.InferSchemaAccessStrategy;
@@ -33,6 +34,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mockito;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
@@ -52,6 +55,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TestInferJsonSchemaAccessStrategy {
 
+    private static final Logger logger = LoggerFactory.getLogger(TestInferJsonSchemaAccessStrategy.class);
     private final SchemaInferenceEngine<JsonNode> timestampInference = new JsonSchemaInference(new TimeValueInference("yyyy-MM-dd", "HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"));
     private final SchemaInferenceEngine<JsonNode> noTimestampInference = new JsonSchemaInference(new TimeValueInference("yyyy-MM-dd", "HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"));
 
@@ -80,7 +84,7 @@ class TestInferJsonSchemaAccessStrategy {
             }
 
             final long millis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
-            System.out.println(millis);
+            logger.info("{}", millis);
         }
     }
 
@@ -108,7 +112,7 @@ class TestInferJsonSchemaAccessStrategy {
             }
 
             final long millis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
-            System.out.println(millis);
+            logger.info("{}", millis);
         }
     }
 
@@ -164,7 +168,7 @@ class TestInferJsonSchemaAccessStrategy {
     }
 
     /**
-     * Test is intended to ensure that all inference rules that are explained in the readers' additionalDetails.html are correct
+     * Test is intended to ensure that all inference rules that are explained in the readers' additionalDetails.md are correct
      */
     @Test
     void testDocsExample() throws IOException {
@@ -236,7 +240,7 @@ class TestInferJsonSchemaAccessStrategy {
              final InputStream bufferedIn = new BufferedInputStream(in)) {
 
             final InferSchemaAccessStrategy<?> accessStrategy = new InferSchemaAccessStrategy<>(
-                    (var, content) -> new JsonRecordSource(content, strategy, startingFieldName),
+                    (var, content) -> new JsonRecordSource(content, strategy, startingFieldName, StreamReadConstraints.defaults()),
                     timestampInference, Mockito.mock(ComponentLog.class)
             );
 

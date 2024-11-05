@@ -16,12 +16,6 @@
  */
 package org.apache.nifi.web.api;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.URI;
-import java.util.Collections;
-
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -32,14 +26,15 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.HttpMethod;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
-import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
@@ -50,26 +45,33 @@ import org.apache.nifi.authorization.RequestAction;
 import org.apache.nifi.authorization.resource.Authorizable;
 import org.apache.nifi.authorization.user.NiFiUserUtils;
 import org.apache.nifi.cluster.coordination.ClusterCoordinator;
-import org.apache.nifi.cluster.coordination.http.replication.RequestReplicator;
+import org.apache.nifi.cluster.coordination.http.replication.RequestReplicationHeader;
 import org.apache.nifi.cluster.protocol.NodeIdentifier;
 import org.apache.nifi.controller.repository.claim.ContentDirection;
-import org.apache.nifi.stream.io.StreamUtils;
 import org.apache.nifi.web.DownloadableContent;
 import org.apache.nifi.web.NiFiServiceFacade;
 import org.apache.nifi.web.api.dto.provenance.ProvenanceEventDTO;
+import org.apache.nifi.web.api.entity.LatestProvenanceEventsEntity;
 import org.apache.nifi.web.api.entity.ProvenanceEventEntity;
 import org.apache.nifi.web.api.entity.ReplayLastEventRequestEntity;
 import org.apache.nifi.web.api.entity.ReplayLastEventResponseEntity;
 import org.apache.nifi.web.api.entity.ReplayLastEventSnapshotDTO;
 import org.apache.nifi.web.api.entity.SubmitReplayRequestEntity;
 import org.apache.nifi.web.api.request.LongParameter;
+import org.apache.nifi.web.api.streaming.StreamingOutputResponseBuilder;
 import org.apache.nifi.web.util.ResponseBuilderUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Controller;
+
+import java.net.URI;
+import java.util.Collections;
 
 /**
  * RESTful endpoint for querying data provenance.
  */
+@Controller
 @Path("/provenance-events")
 @Tag(name = "ProvenanceEvents")
 public class ProvenanceEventResource extends ApplicationResource {
@@ -99,14 +101,20 @@ public class ProvenanceEventResource extends ApplicationResource {
     )
     @ApiResponses(
             value = {
+                    @ApiResponse(responseCode = "206", description = "Partial Content with range of bytes requested"),
                     @ApiResponse(responseCode = "400", description = "NiFi was unable to complete the request because it was invalid. The request should not be retried without modification."),
                     @ApiResponse(responseCode = "401", description = "Client could not be authenticated."),
                     @ApiResponse(responseCode = "403", description = "Client is not authorized to make this request."),
                     @ApiResponse(responseCode = "404", description = "The specified resource could not be found."),
-                    @ApiResponse(responseCode = "409", description = "The request was valid but NiFi was not in the appropriate state to process it.")
+                    @ApiResponse(responseCode = "409", description = "The request was valid but NiFi was not in the appropriate state to process it."),
+                    @ApiResponse(responseCode = "416", description = "Requested Range Not Satisfiable based on bytes requested")
             }
     )
     public Response getInputContent(
+            @Parameter(
+                    description = "Range of bytes requested"
+            )
+            @HeaderParam("Range") final String rangeHeader,
             @Parameter(
                     description = "The id of the node where the content exists if clustered."
             )
@@ -135,30 +143,13 @@ public class ProvenanceEventResource extends ApplicationResource {
         // get the uri of the request
         final String uri = generateResourceUri("provenance", "events", String.valueOf(id.getLong()), "content", "input");
 
-        // get an input stream to the content
         final DownloadableContent content = serviceFacade.getContent(id.getLong(), uri, ContentDirection.INPUT);
-
-        // generate a streaming response
-        final StreamingOutput response = new StreamingOutput() {
-            @Override
-            public void write(OutputStream output) throws IOException, WebApplicationException {
-                try (InputStream is = content.getContent()) {
-                    // stream the content to the response
-                    StreamUtils.copy(is, output);
-
-                    // flush the response
-                    output.flush();
-                }
-            }
-        };
-
-        // use the appropriate content type
+        final Response.ResponseBuilder responseBuilder = noCache(new StreamingOutputResponseBuilder(content.getContent()).range(rangeHeader).build());
         String contentType = content.getType();
         if (contentType == null) {
             contentType = MediaType.APPLICATION_OCTET_STREAM;
         }
-
-        final Response.ResponseBuilder responseBuilder = generateOkResponse(response).type(contentType);
+        responseBuilder.type(contentType);
         return ResponseBuilderUtils.setContentDisposition(responseBuilder, content.getFilename()).build();
     }
 
@@ -183,14 +174,20 @@ public class ProvenanceEventResource extends ApplicationResource {
     )
     @ApiResponses(
             value = {
+                    @ApiResponse(responseCode = "206", description = "Partial Content with range of bytes requested"),
                     @ApiResponse(responseCode = "400", description = "NiFi was unable to complete the request because it was invalid. The request should not be retried without modification."),
                     @ApiResponse(responseCode = "401", description = "Client could not be authenticated."),
                     @ApiResponse(responseCode = "403", description = "Client is not authorized to make this request."),
                     @ApiResponse(responseCode = "404", description = "The specified resource could not be found."),
-                    @ApiResponse(responseCode = "409", description = "The request was valid but NiFi was not in the appropriate state to process it.")
+                    @ApiResponse(responseCode = "409", description = "The request was valid but NiFi was not in the appropriate state to process it."),
+                    @ApiResponse(responseCode = "416", description = "Requested Range Not Satisfiable based on bytes requested"),
             }
     )
     public Response getOutputContent(
+            @Parameter(
+                    description = "Range of bytes requested"
+            )
+            @HeaderParam("Range") final String rangeHeader,
             @Parameter(
                     description = "The id of the node where the content exists if clustered."
             )
@@ -219,30 +216,13 @@ public class ProvenanceEventResource extends ApplicationResource {
         // get the uri of the request
         final String uri = generateResourceUri("provenance", "events", String.valueOf(id.getLong()), "content", "output");
 
-        // get an input stream to the content
         final DownloadableContent content = serviceFacade.getContent(id.getLong(), uri, ContentDirection.OUTPUT);
-
-        // generate a streaming response
-        final StreamingOutput response = new StreamingOutput() {
-            @Override
-            public void write(OutputStream output) throws IOException, WebApplicationException {
-                try (InputStream is = content.getContent()) {
-                    // stream the content to the response
-                    StreamUtils.copy(is, output);
-
-                    // flush the response
-                    output.flush();
-                }
-            }
-        };
-
-        // use the appropriate content type
+        final Response.ResponseBuilder responseBuilder = noCache(new StreamingOutputResponseBuilder(content.getContent()).range(rangeHeader).build());
         String contentType = content.getType();
         if (contentType == null) {
             contentType = MediaType.APPLICATION_OCTET_STREAM;
         }
-
-        final Response.ResponseBuilder responseBuilder = generateOkResponse(response).type(contentType);
+        responseBuilder.type(contentType);
         return ResponseBuilderUtils.setContentDisposition(responseBuilder, content.getFilename()).build();
     }
 
@@ -471,7 +451,7 @@ public class ProvenanceEventResource extends ApplicationResource {
         }
 
         // handle expects request (usually from the cluster manager)
-        final String expects = httpServletRequest.getHeader(RequestReplicator.REQUEST_VALIDATION_HTTP_HEADER);
+        final String expects = httpServletRequest.getHeader(RequestReplicationHeader.VALIDATION_EXPECTS.getHeader());
         if (expects != null) {
             return generateContinueResponse().build();
         }
@@ -496,12 +476,56 @@ public class ProvenanceEventResource extends ApplicationResource {
         return generateCreatedResponse(uri, entity).build();
     }
 
-    // setters
+    @GET
+    @Consumes(MediaType.WILDCARD)
+    @Produces(MediaType.APPLICATION_JSON)
+    @Path("latest/{componentId}")
+    @Operation(
+        summary = "Retrieves the latest cached Provenance Events for the specified component",
+        responses = @ApiResponse(content = @Content(schema = @Schema(implementation = LatestProvenanceEventsEntity.class))),
+        security = {
+            @SecurityRequirement(name = "Read Component Provenance Data - /provenance-data/{component-type}/{uuid}"),
+            @SecurityRequirement(name = "Read Component Data - /data/{component-type}/{uuid}")
+        }
+    )
+    @ApiResponses(
+        value = {
+            @ApiResponse(responseCode = "400", description = "NiFi was unable to complete the request because it was invalid. The request should not be retried without modification."),
+            @ApiResponse(responseCode = "401", description = "Client could not be authenticated."),
+            @ApiResponse(responseCode = "403", description = "Client is not authorized to make this request."),
+            @ApiResponse(responseCode = "404", description = "The specified resource could not be found."),
+            @ApiResponse(responseCode = "409", description = "The request was valid but NiFi was not in the appropriate state to process it.")
+        }
+    )
+    public Response getLatestProvenanceEvents(
+        @Parameter(
+            description = "The ID of the component to retrieve the latest Provenance Events for.",
+            required = true
+        )
+        @PathParam("componentId") final String componentId,
+        @Parameter(
+                description = "The number of events to limit the response to. Defaults to 10."
+        )
+        @DefaultValue("10")
+        @QueryParam("limit") int limit
+    ) {
+        if (isReplicateRequest()) {
+            return replicate(HttpMethod.GET);
+        }
 
+        // get the latest provenance events
+        final LatestProvenanceEventsEntity entity = serviceFacade.getLatestProvenanceEvents(componentId, limit);
+
+        // generate the response
+        return generateOkResponse(entity).build();
+    }
+
+    @Autowired
     public void setServiceFacade(NiFiServiceFacade serviceFacade) {
         this.serviceFacade = serviceFacade;
     }
 
+    @Autowired
     public void setAuthorizer(Authorizer authorizer) {
         this.authorizer = authorizer;
     }

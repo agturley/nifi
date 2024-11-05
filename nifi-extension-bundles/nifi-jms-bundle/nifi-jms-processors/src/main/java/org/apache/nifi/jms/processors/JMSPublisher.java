@@ -42,7 +42,7 @@ class JMSPublisher extends JMSWorker {
 
     JMSPublisher(CachingConnectionFactory connectionFactory, JmsTemplate jmsTemplate, ComponentLog processLog) {
         super(connectionFactory, jmsTemplate, processLog);
-        processLog.debug("Created Message Publisher for {}", new Object[] {jmsTemplate});
+        processLog.debug("Created Message Publisher for {}", jmsTemplate);
     }
 
     void publish(String destinationName, byte[] messageBytes) {
@@ -132,15 +132,14 @@ class JMSPublisher extends JMSWorker {
                                 .setProperty(message, entry.getKey(), entry.getValue());
                     }
                 } catch (NumberFormatException ne) {
-                    this.processLog.warn("Incompatible value for attribute " + entry.getKey()
-                            + " [" + entry.getValue() + "] is not a number. Ignoring this attribute.");
+                    this.processLog.warn("Incompatible value for attribute {} [{}] is not a number. Ignoring this attribute.", entry.getKey(), entry.getValue());
                 }
             }
         }
     }
 
     private void logUnbuildableDestination(String destinationName, String headerName) {
-        this.processLog.warn("Failed to determine destination type from destination name '{}'. The '{}' header will not be set.", new Object[] {destinationName, headerName});
+        this.processLog.warn("Failed to determine destination type from destination name '{}'. The '{}' header will not be set.", destinationName, headerName);
     }
 
 
@@ -154,7 +153,7 @@ class JMSPublisher extends JMSWorker {
     }
 
     /**
-     * Implementations of this interface use {@link javax.jms.Message} methods to set strongly typed properties.
+     * Implementations of this interface use {@link jakarta.jms.Message} methods to set strongly typed properties.
      */
     public interface JmsPropertySetter {
         void setProperty(final Message message, final String name, final String value) throws JMSException, NumberFormatException;

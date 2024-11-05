@@ -54,6 +54,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import jakarta.ws.rs.WebApplicationException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Repository;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -65,6 +68,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 
+@Repository
 public class StandardConnectionDAO extends ComponentDAO implements ConnectionDAO {
 
     private static final Logger logger = LoggerFactory.getLogger(StandardConnectionDAO.class);
@@ -144,7 +148,7 @@ public class StandardConnectionDAO extends ComponentDAO implements ConnectionDAO
 
             return flowFile;
         } catch (final IOException ioe) {
-            logger.error(String.format("Unable to get the flowfile (%s) at this time.", flowFileUuid), ioe);
+            logger.error("Unable to get the flowfile ({}) at this time.", flowFileUuid, ioe);
             throw new IllegalStateException("Unable to get the FlowFile at this time.");
         }
     }
@@ -677,16 +681,17 @@ public class StandardConnectionDAO extends ComponentDAO implements ConnectionDAO
         } catch (final ContentNotFoundException cnfe) {
             throw new ResourceNotFoundException("Unable to find the specified content.");
         } catch (final IOException ioe) {
-            logger.error(String.format("Unable to get the content for flowfile (%s) at this time.", flowFileUuid), ioe);
+            logger.error("Unable to get the content for flowfile ({}) at this time.", flowFileUuid, ioe);
             throw new IllegalStateException("Unable to get the content at this time.");
         }
     }
 
-    /* setters */
+    @Autowired
     public void setFlowController(final FlowController flowController) {
         this.flowController = flowController;
     }
 
+    @Autowired
     public void setAuthorizer(Authorizer authorizer) {
         this.authorizer = authorizer;
     }

@@ -28,7 +28,6 @@ import org.apache.nifi.controller.ConfigurationContext;
 import org.apache.nifi.logging.ComponentLog;
 import org.apache.nifi.parameter.AbstractParameterProvider;
 import org.apache.nifi.parameter.Parameter;
-import org.apache.nifi.parameter.ParameterDescriptor;
 import org.apache.nifi.parameter.ParameterGroup;
 import org.apache.nifi.parameter.VerifiableParameterProvider;
 import org.apache.nifi.processor.util.StandardValidators;
@@ -147,8 +146,7 @@ public class AzureKeyVaultSecretsParameterProvider extends AbstractParameterProv
             }
             final String parameterGroupName = tags.get(GROUP_NAME_TAG);
             if (parameterGroupName == null) {
-                getLogger().debug("Secret with parameter name [{}] not recognized as a valid parameter since it " +
-                                "does not have the [{}] tag", parameterName, GROUP_NAME_TAG);
+                getLogger().debug("Secret with parameter name [{}] not recognized as a valid parameter since it does not have the [{}] tag", parameterName, GROUP_NAME_TAG);
                 continue;
             }
 
@@ -181,8 +179,11 @@ public class AzureKeyVaultSecretsParameterProvider extends AbstractParameterProv
     }
 
     private Parameter createParameter(final String parameterName, final String parameterValue) {
-        final ParameterDescriptor parameterDescriptor = new ParameterDescriptor.Builder().name(parameterName).build();
-        return new Parameter(parameterDescriptor, parameterValue, null, true);
+        return new Parameter.Builder()
+            .name(parameterName)
+            .value(parameterValue)
+            .provided(true)
+            .build();
     }
 
     SecretClient configureSecretClient(final ConfigurationContext context) {

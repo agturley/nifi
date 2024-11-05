@@ -52,11 +52,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.ListIterator;
@@ -141,6 +138,14 @@ public class SplitText extends AbstractProcessor {
             .defaultValue("true")
             .build();
 
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(
+            LINE_SPLIT_COUNT,
+            FRAGMENT_MAX_SIZE,
+            HEADER_LINE_COUNT,
+            HEADER_MARKER,
+            REMOVE_TRAILING_NEWLINES
+    );
+
     public static final Relationship REL_ORIGINAL = new Relationship.Builder()
             .name("original")
             .description("The original input file will be routed to this destination when it has been successfully split into 1 or more files")
@@ -154,22 +159,11 @@ public class SplitText extends AbstractProcessor {
             .description("If a file cannot be split for some reason, the original file will be routed to this destination and nothing will be routed elsewhere")
             .build();
 
-    private static final List<PropertyDescriptor> properties;
-    private static final Set<Relationship> relationships;
-
-    static {
-        properties = Collections.unmodifiableList(Arrays.asList(
-            LINE_SPLIT_COUNT,
-            FRAGMENT_MAX_SIZE,
-            HEADER_LINE_COUNT,
-            HEADER_MARKER,
-            REMOVE_TRAILING_NEWLINES));
-
-        relationships = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(
             REL_ORIGINAL,
             REL_SPLITS,
-            REL_FAILURE)));
-    }
+            REL_FAILURE
+    );
 
     private volatile boolean removeTrailingNewLines;
 
@@ -183,7 +177,7 @@ public class SplitText extends AbstractProcessor {
 
     @Override
     public Set<Relationship> getRelationships() {
-        return relationships;
+        return RELATIONSHIPS;
     }
 
     @OnScheduled
@@ -223,8 +217,8 @@ public class SplitText extends AbstractProcessor {
                         splitInfo = SplitText.this.computeHeader(demarcator, startOffset, SplitText.this.headerLineCount, null, null);
                         if ((splitInfo != null) && (splitInfo.lineCount < SplitText.this.headerLineCount)) {
                             error.set(true);
-                            getLogger().error("Unable to split " + sourceFlowFile + " due to insufficient amount of header lines. Required "
-                                    + SplitText.this.headerLineCount + " but was " + splitInfo.lineCount + ". Routing to failure.");
+                            getLogger().error("Unable to split {} due to insufficient amount of header lines. Required {} but was {}. Routing to failure.",
+                                    sourceFlowFile, SplitText.this.headerLineCount, splitInfo.lineCount);
                         }
                     } else if (SplitText.this.headerMarker != null) {
                         splitInfo = SplitText.this.computeHeader(demarcator, startOffset, Long.MAX_VALUE, SplitText.this.headerMarker.getBytes(StandardCharsets.UTF_8), null);
@@ -232,7 +226,7 @@ public class SplitText extends AbstractProcessor {
                     headerSplitInfoRef.set(splitInfo);
                 } catch (IllegalStateException e) {
                     error.set(true);
-                    getLogger().error(e.getMessage() + " Routing to failure.", e);
+                    getLogger().error("Routing to failure.", e);
                 }
 
                 // Compute and collect fragments representing the individual splits
@@ -247,7 +241,7 @@ public class SplitText extends AbstractProcessor {
                     }
                     long stop = System.nanoTime();
                     if (getLogger().isDebugEnabled()) {
-                        getLogger().debug("Computed splits in " + (stop - start) + " milliseconds.");
+                        getLogger().debug("Computed splits in {} milliseconds.", (stop - start));
                     }
                 }
             }
@@ -280,7 +274,7 @@ public class SplitText extends AbstractProcessor {
 
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        return properties;
+        return PROPERTIES;
     }
 
     /**
@@ -300,7 +294,7 @@ public class SplitText extends AbstractProcessor {
         }
         int fragmentIndex = 1; // set to 1 to preserve the existing behavior *only*. Perhaps should be deprecated to follow the 0,1,2... scheme
 
-        if ((computedSplitsInfo.size() == 0) && (headerFlowFile != null)) {
+        if (computedSplitsInfo.isEmpty() && headerFlowFile != null) {
             FlowFile splitFlowFile = processSession.clone(sourceFlowFile, 0, headerFlowFile.getSize() - headerCrlfLength);
             splitFlowFile = this.updateAttributes(processSession, splitFlowFile, 0, splitFlowFile.getSize(),
                     fragmentId, fragmentIndex++, sourceFlowFile.getAttribute(CoreAttributes.FILENAME.key()));
@@ -344,7 +338,7 @@ public class SplitText extends AbstractProcessor {
             }
         }
 
-        getLogger().info("Split {} into {} FlowFiles{}", new Object[] {sourceFlowFile, splitFlowFiles.size(), headerFlowFile == null ? " containing headers." : "."});
+        getLogger().info("Split {} into {} FlowFiles{}", sourceFlowFile, splitFlowFiles.size(), headerFlowFile == null ? " containing headers." : ".");
         if (headerFlowFile != null) {
             processSession.remove(headerFlowFile);
         }
@@ -390,7 +384,7 @@ public class SplitText extends AbstractProcessor {
     /**
      * Will generate {@link SplitInfo} for the next fragment that represents the
      * header of the future split.
-     *
+     * <p>
      * If split size is controlled by the amount of lines in the split then the
      * resulting {@link SplitInfo} line count will always be <= 'splitMaxLineCount'. It can only be less IF it reaches the EOF.
      * If split size is controlled by the {@link #maxSplitSize}, then the resulting {@link SplitInfo} line count
@@ -434,7 +428,7 @@ public class SplitText extends AbstractProcessor {
 
     /**
      * Will generate {@link SplitInfo} for the next split.
-     *
+     * <p>
      * If split size is controlled by the amount of lines in the split then the resulting
      * {@link SplitInfo} line count will always be <= 'splitMaxLineCount'.
      * If split size is controlled by the {@link #maxSplitSize}, then the resulting {@link SplitInfo}

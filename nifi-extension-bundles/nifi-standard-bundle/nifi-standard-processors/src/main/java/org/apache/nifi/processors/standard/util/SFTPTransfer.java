@@ -16,13 +16,13 @@
  */
 package org.apache.nifi.processors.standard.util;
 
+import com.hierynomus.sshj.sftp.RemoteResourceSelector;
 import net.schmizz.sshj.DefaultConfig;
 import net.schmizz.sshj.SSHClient;
 import net.schmizz.sshj.common.Factory;
 import net.schmizz.sshj.sftp.FileAttributes;
 import net.schmizz.sshj.sftp.FileMode;
 import net.schmizz.sshj.sftp.RemoteFile;
-import net.schmizz.sshj.sftp.RemoteResourceFilter;
 import net.schmizz.sshj.sftp.RemoteResourceInfo;
 import net.schmizz.sshj.sftp.Response;
 import net.schmizz.sshj.sftp.SFTPClient;
@@ -87,14 +87,14 @@ public class SFTPTransfer implements FileTransfer {
     static {
         DefaultConfig defaultConfig = new DefaultConfig();
 
-        DEFAULT_KEY_ALGORITHM_NAMES = Collections.unmodifiableSet(defaultConfig.getKeyAlgorithms().stream()
-                .map(Factory.Named::getName).collect(Collectors.toSet()));
-        DEFAULT_CIPHER_NAMES = Collections.unmodifiableSet(defaultConfig.getCipherFactories().stream()
-                .map(Factory.Named::getName).collect(Collectors.toSet()));
-        DEFAULT_MESSAGE_AUTHENTICATION_CODE_NAMES = Collections.unmodifiableSet(defaultConfig.getMACFactories().stream()
-                .map(Factory.Named::getName).collect(Collectors.toSet()));
-        DEFAULT_KEY_EXCHANGE_ALGORITHM_NAMES = Collections.unmodifiableSet(defaultConfig.getKeyExchangeFactories().stream()
-                .map(Factory.Named::getName).collect(Collectors.toSet()));
+        DEFAULT_KEY_ALGORITHM_NAMES = defaultConfig.getKeyAlgorithms().stream()
+                .map(Factory.Named::getName).collect(Collectors.toUnmodifiableSet());
+        DEFAULT_CIPHER_NAMES = defaultConfig.getCipherFactories().stream()
+                .map(Factory.Named::getName).collect(Collectors.toUnmodifiableSet());
+        DEFAULT_MESSAGE_AUTHENTICATION_CODE_NAMES = defaultConfig.getMACFactories().stream()
+                .map(Factory.Named::getName).collect(Collectors.toUnmodifiableSet());
+        DEFAULT_KEY_EXCHANGE_ALGORITHM_NAMES = defaultConfig.getKeyExchangeFactories().stream()
+                .map(Factory.Named::getName).collect(Collectors.toUnmodifiableSet());
     }
 
     /**
@@ -233,8 +233,7 @@ public class SFTPTransfer implements FileTransfer {
         .build();
 
     private static final ProxySpec[] PROXY_SPECS = {ProxySpec.HTTP_AUTH, ProxySpec.SOCKS_AUTH};
-    public static final PropertyDescriptor PROXY_CONFIGURATION_SERVICE
-            = ProxyConfiguration.createProxyConfigPropertyDescriptor(true, PROXY_SPECS);
+    public static final PropertyDescriptor PROXY_CONFIGURATION_SERVICE = ProxyConfiguration.createProxyConfigPropertyDescriptor(PROXY_SPECS);
 
     private final ComponentLog logger;
 
@@ -287,6 +286,7 @@ public class SFTPTransfer implements FileTransfer {
 
         final List<FileInfo> listing = new ArrayList<>(1000);
         getListing(path, depth, maxResults, listing, applyFilters);
+
         return listing;
     }
 
@@ -297,7 +297,7 @@ public class SFTPTransfer implements FileTransfer {
         }
 
         if (depth >= 100) {
-            logger.warn(this + " had to stop recursively searching directories at a recursive depth of " + depth + " to avoid memory issues");
+            logger.warn("{} had to stop recursively searching directories at a recursive depth of {} to avoid memory issues", this, depth);
             return;
         }
 
@@ -328,45 +328,47 @@ public class SFTPTransfer implements FileTransfer {
         final boolean pathMatched = pathFilterMatches;
         final boolean filteringDisabled = !applyFilters;
 
-        final List<RemoteResourceInfo> subDirs = new ArrayList<>();
+        final List<RemoteResourceInfo> subDirectoryPaths = new ArrayList<>();
         try {
-            final RemoteResourceFilter filter = (entry) -> {
+            final RemoteResourceSelector selector = (entry) -> {
                 final String entryFilename = entry.getName();
 
                 // skip over 'this directory' and 'parent directory' special files regardless of ignoring dot files
                 if (RELATIVE_CURRENT_DIRECTORY.equals(entryFilename) || RELATIVE_PARENT_DIRECTORY.equals(entryFilename)) {
-                    return false;
+                    return RemoteResourceSelector.Result.CONTINUE;
                 }
 
                 // skip files and directories that begin with a dot if we're ignoring them
                 if (ignoreDottedFiles && entryFilename.startsWith(DOT_PREFIX)) {
-                    return false;
+                    return RemoteResourceSelector.Result.CONTINUE;
                 }
 
+                // remember directory for later recursive listing
                 if (isIncludedDirectory(entry, recurse, symlink)) {
-                    subDirs.add(entry);
-                    return false;
+                    subDirectoryPaths.add(entry);
+                    return RemoteResourceSelector.Result.CONTINUE;
                 }
 
-                // Since SSHJ does not have the concept of BREAK that JSCH had, we need to move this before the call to listing.add
-                // below, otherwise we would keep adding to the listings since returning false here doesn't break
-                if (listing.size() >= maxResults) {
-                    return false;
-                }
-
+                // add regular files matching our filter to the result
                 if (isIncludedFile(entry, symlink) && (filteringDisabled || pathMatched)) {
                     if (filteringDisabled || fileFilterPattern == null || fileFilterPattern.matcher(entryFilename).matches()) {
                         listing.add(newFileInfo(path, entry.getName(), entry.getAttributes()));
+
+                        // abort further processing once we've reached the configured amount of maxResults
+                        if (listing.size() >= maxResults) {
+                            return RemoteResourceSelector.Result.BREAK;
+                        }
                     }
                 }
 
-                return false;
+                // SSHJ does not need to keep track as we collect the results ourselves, continue with next entry instead
+                return RemoteResourceSelector.Result.CONTINUE;
             };
 
-            if (path == null || path.trim().isEmpty()) {
-                sftpClient.ls(RELATIVE_CURRENT_DIRECTORY, filter);
+            if (path == null || path.isBlank()) {
+                sftpClient.ls(RELATIVE_CURRENT_DIRECTORY, selector);
             } else {
-                sftpClient.ls(path, filter);
+                sftpClient.ls(path, selector);
             }
         } catch (final SFTPException e) {
             final String pathDesc = path == null ? "current directory" : path;
@@ -381,7 +383,7 @@ public class SFTPTransfer implements FileTransfer {
             }
         }
 
-        for (final RemoteResourceInfo entry : subDirs) {
+        for (final RemoteResourceInfo entry : subDirectoryPaths) {
             final String entryFilename = entry.getName();
             final File newFullPath = new File(path, entryFilename);
             final String newFullForwardPath = newFullPath.getPath().replace("\\", "/");
@@ -389,10 +391,9 @@ public class SFTPTransfer implements FileTransfer {
             try {
                 getListing(newFullForwardPath, depth + 1, maxResults, listing, applyFilters);
             } catch (final IOException e) {
-                logger.error("Unable to get listing from " + newFullForwardPath + "; skipping", e);
+                logger.error("Unable to get listing from {}; skipping", newFullForwardPath, e);
             }
         }
-
     }
 
     /**
@@ -478,15 +479,10 @@ public class SFTPTransfer implements FileTransfer {
     @Override
     public FlowFile getRemoteFile(final String remoteFileName, final FlowFile origFlowFile, final ProcessSession session) throws ProcessException, IOException {
         final SFTPClient sftpClient = getSFTPClient(origFlowFile);
-        RemoteFile rf = null;
-        RemoteFile.ReadAheadRemoteFileInputStream rfis = null;
-        FlowFile resultFlowFile;
-        try {
-            rf = sftpClient.open(remoteFileName);
-            rfis = rf.new ReadAheadRemoteFileInputStream(16);
-            final InputStream in = rfis;
-            resultFlowFile = session.write(origFlowFile, out -> StreamUtils.copy(in, out));
-            return resultFlowFile;
+
+        try (RemoteFile rf = sftpClient.open(remoteFileName);
+             RemoteFile.ReadAheadRemoteFileInputStream rfis = rf.new ReadAheadRemoteFileInputStream(16)) {
+            return session.write(origFlowFile, out -> StreamUtils.copy(rfis, out));
         } catch (final SFTPException e) {
             switch (e.getStatusCode()) {
                 case NO_SUCH_FILE:
@@ -495,21 +491,6 @@ public class SFTPTransfer implements FileTransfer {
                     throw new PermissionDeniedException("Insufficient permissions to read file " + remoteFileName + " from remote SFTP Server", e);
                 default:
                     throw new IOException("Failed to obtain file content for " + remoteFileName, e);
-            }
-        } finally {
-            if (rf != null) {
-                try {
-                    rf.close();
-                } catch (final IOException ioe) {
-                    //do nothing
-                }
-            }
-            if (rfis != null) {
-                try {
-                    rfis.close();
-                } catch (final IOException ioe) {
-                    //do nothing
-                }
             }
         }
     }
@@ -558,10 +539,10 @@ public class SFTPTransfer implements FileTransfer {
             } catch (SFTPException e) {
                 if (e.getStatusCode() == Response.StatusCode.NO_SUCH_FILE) {
                     // No Such File. This happens when parent directory was not found.
-                    logger.debug(String.format("Could not create %s due to 'No such file'. Will try to create the parent dir.", remoteDirectory));
+                    logger.debug("Could not create {} due to 'No such file'. Will try to create the parent dir.", remoteDirectory);
                 } else if (e.getStatusCode() == Response.StatusCode.FAILURE) {
                     // Swallow '4: Failure' including the remote directory already exists.
-                    logger.debug("Could not blindly create remote directory due to " + getMessage(e), e);
+                    logger.debug("Could not blindly create remote directory", e);
                     return;
                 } else {
                     throw new IOException("Could not blindly create remote directory due to " + e.getMessage(), e);
@@ -673,7 +654,7 @@ public class SFTPTransfer implements FileTransfer {
                 sftpClient.close();
             }
         } catch (final Exception ex) {
-            logger.warn("Failed to close SFTPClient due to {}", ex.toString(), ex);
+            logger.warn("Failed to close SFTPClient", ex);
         }
         sftpClient = null;
 
@@ -682,7 +663,7 @@ public class SFTPTransfer implements FileTransfer {
                 sshClient.disconnect();
             }
         } catch (final Exception ex) {
-            logger.warn("Failed to close SSHClient due to {}", ex.toString(), ex);
+            logger.warn("Failed to close SSHClient", ex);
         }
         sshClient = null;
     }
@@ -785,6 +766,13 @@ public class SFTPTransfer implements FileTransfer {
         }
 
         if (!filename.equals(tempFilename)) {
+            try {
+                // file was transferred to a temporary filename, attempt to delete destination filename before rename
+                sftpClient.rm(fullPath);
+            } catch (final SFTPException e) {
+                logger.debug("Failed to remove {} before renaming temporary file", fullPath, e);
+            }
+
             try {
                 sftpClient.rename(tempPath, fullPath);
             } catch (final SFTPException e) {

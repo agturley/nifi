@@ -86,7 +86,7 @@ public class DatabaseAccessPolicyProvider extends AbstractConfigurableAccessPoli
         final String nifiGroupName = AccessPolicyProviderUtils.getNiFiGroupName(configurationContext, identityMapper);
 
         if (!StringUtils.isBlank(initialAdminIdentity)) {
-            LOGGER.info("Populating authorizations for Initial Admin: '" + initialAdminIdentity + "'");
+            LOGGER.info("Populating authorizations for Initial Admin: '{}'", initialAdminIdentity);
             populateInitialAdmin(initialAdminIdentity);
         }
 
@@ -96,7 +96,7 @@ public class DatabaseAccessPolicyProvider extends AbstractConfigurableAccessPoli
         }
 
         if (!StringUtils.isBlank(nifiGroupName)) {
-            LOGGER.info("Populating authorizations for NiFi Group: '" + nifiGroupName + "'");
+            LOGGER.info("Populating authorizations for NiFi Group: '{}'", nifiGroupName);
             populateNiFiGroup(nifiGroupName);
         }
     }
@@ -357,11 +357,9 @@ public class DatabaseAccessPolicyProvider extends AbstractConfigurableAccessPoli
         } else {
             // a policy already exists for the given resource and action, so just associate the user with that policy
             if (existingPolicy.getUsers().contains(initialUser.getIdentifier())) {
-                LOGGER.debug("'{}' is already part of the policy for {} {}",
-                        new Object[]{initialUser.getIdentity(), action.toString(), resourceIdentifier});
+                LOGGER.debug("'{}' is already part of the policy for {} {}", initialUser.getIdentity(), action, resourceIdentifier);
             } else {
-                LOGGER.debug("Adding '{}' to the policy for {} {}",
-                        new Object[]{initialUser.getIdentity(), action.toString(), resourceIdentifier});
+                LOGGER.debug("Adding '{}' to the policy for {} {}", initialUser.getIdentity(), action, resourceIdentifier);
                 insertPolicyUser(existingPolicy.getIdentifier(), userIdentifier);
             }
         }

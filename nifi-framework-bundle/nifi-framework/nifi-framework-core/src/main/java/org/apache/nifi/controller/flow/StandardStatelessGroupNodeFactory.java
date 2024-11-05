@@ -56,7 +56,6 @@ import org.apache.nifi.logging.LoggingContext;
 import org.apache.nifi.logging.StandardLoggingContext;
 import org.apache.nifi.parameter.ParameterContextManager;
 import org.apache.nifi.processor.SimpleProcessLogger;
-import org.apache.nifi.provenance.ProvenanceRepository;
 import org.apache.nifi.registry.flow.mapping.ComponentIdLookup;
 import org.apache.nifi.registry.flow.mapping.FlowMappingOptions;
 import org.apache.nifi.registry.flow.mapping.InstantiatedVersionedProcessGroup;
@@ -74,7 +73,6 @@ import org.apache.nifi.stateless.repository.StatelessFlowFileRepository;
 import org.apache.nifi.stateless.repository.StatelessProvenanceRepository;
 import org.apache.nifi.stateless.repository.StatelessRepositoryContextFactory;
 
-import javax.net.ssl.SSLContext;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.Collections;
@@ -89,6 +87,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
+import javax.net.ssl.SSLContext;
 
 public class StandardStatelessGroupNodeFactory implements StatelessGroupNodeFactory {
     private final FlowController flowController;
@@ -140,6 +139,7 @@ public class StandardStatelessGroupNodeFactory implements StatelessGroupNodeFact
             .mapSensitiveConfiguration(true)
             .sensitiveValueEncryptor(value -> value)    // No need to encrypt, since we won't be persisting the flow
             .stateLookup(VersionedComponentStateLookup.IDENTITY_LOOKUP)
+            .mapAssetReferences(true)
             .build();
 
         final StatelessGroupFactory statelessGroupFactory = new StatelessGroupFactory() {
@@ -234,10 +234,11 @@ public class StandardStatelessGroupNodeFactory implements StatelessGroupNodeFact
             .counterRepository(flowController.getCounterRepository())
             .encryptor(flowController.getEncryptor())
             .extensionManager(flowController.getExtensionManager())
+            .assetManager(flowController.getAssetManager())
             .extensionRepository(extensionRepository)
             .flowFileEventRepository(flowFileEventRepository)
             .processScheduler(statelessScheduler)
-            .provenanceRepository((ProvenanceRepository) statelessRepositoryContextFactory.getProvenanceRepository())
+            .provenanceRepository(flowController.getProvenanceRepository())
             .stateManagerProvider(stateManagerProvider)
             .kerberosConfiguration(kerberosConfig)
             .statusTaskInterval(null)
@@ -294,8 +295,10 @@ public class StandardStatelessGroupNodeFactory implements StatelessGroupNodeFact
 
         child.synchronizeFlow(versionedExternalFlow, synchronizationOptions, flowMappingOptions);
         child.setParent(group);
+
         return child;
     }
+
 
     private FlowEngine lazyInitializeThreadPool(final AtomicReference<FlowEngine> reference, final Supplier<FlowEngine> factory) {
         FlowEngine threadPool = reference.get();

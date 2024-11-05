@@ -17,6 +17,7 @@
 package org.apache.nifi.nar;
 
 import org.apache.nifi.annotation.behavior.RequiresInstanceClassLoading;
+import org.apache.nifi.asset.AssetManager;
 import org.apache.nifi.authentication.LoginIdentityProvider;
 import org.apache.nifi.authorization.AccessPolicyProvider;
 import org.apache.nifi.authorization.Authorizer;
@@ -45,6 +46,7 @@ import org.apache.nifi.parameter.ParameterProvider;
 import org.apache.nifi.processor.Processor;
 import org.apache.nifi.provenance.ProvenanceRepository;
 import org.apache.nifi.python.PythonBridge;
+import org.apache.nifi.python.PythonBundleCoordinate;
 import org.apache.nifi.python.PythonProcessorDetails;
 import org.apache.nifi.registry.flow.FlowRegistryClient;
 import org.apache.nifi.reporting.InitializationException;
@@ -72,23 +74,22 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.stream.Collectors;
 
 /**
  * Scans through the classpath to load all FlowFileProcessors, FlowFileComparators, and ReportingTasks using the service provider API and running through all classloaders (root, NARs).
- *
- * @ThreadSafe - is immutable
  */
 @SuppressWarnings("rawtypes")
 public class StandardExtensionDiscoveringManager implements ExtensionDiscoveringManager {
 
     private static final Logger logger = LoggerFactory.getLogger(StandardExtensionDiscoveringManager.class);
-    private static final String PYTHON_TYPE_PREFIX = "python.";
 
     // Maps a service definition (interface) to those classes that implement the interface
-    private final Map<Class, Set<ExtensionDefinition>> definitionMap = new HashMap<>();
+    private final Map<Class<?>, Set<ExtensionDefinition>> definitionMap = new HashMap<>();
 
     private final Map<String, List<Bundle>> classNameBundleLookup = new HashMap<>();
     private final Map<BundleCoordinate, Set<ExtensionDefinition>> bundleCoordinateClassesLookup = new HashMap<>();
@@ -129,27 +130,34 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
         definitionMap.put(FlowRegistryClient.class, new HashSet<>());
         definitionMap.put(LeaderElectionManager.class, new HashSet<>());
         definitionMap.put(PythonBridge.class, new HashSet<>());
+        definitionMap.put(NarPersistenceProvider.class, new HashSet<>());
+        definitionMap.put(AssetManager.class, new HashSet<>());
 
         additionalExtensionTypes.forEach(type -> definitionMap.putIfAbsent(type, new HashSet<>()));
     }
 
     @Override
-    public Set<Bundle> getAllBundles() {
+    public synchronized Set<Bundle> getAllBundles() {
         return new HashSet<>(bundleCoordinateBundleLookup.values());
     }
 
     @Override
-    public void discoverExtensions(final Bundle systemBundle, final Set<Bundle> narBundles) {
+    public synchronized void discoverExtensions(final Bundle systemBundle, final Set<Bundle> narBundles) {
         // load the system bundle first so that any extensions found in JARs directly in lib will be registered as
         // being from the system bundle and not from all the other NARs
-        loadExtensions(systemBundle);
+        loadExtensions(systemBundle, definitionMap.keySet());
         bundleCoordinateBundleLookup.put(systemBundle.getBundleDetails().getCoordinate(), systemBundle);
 
         discoverExtensions(narBundles);
     }
 
     @Override
-    public void discoverExtensions(final Set<Bundle> narBundles, final boolean logDetails) {
+    public synchronized void discoverExtensions(final Set<Bundle> narBundles, final boolean logDetails) {
+        discoverExtensions(narBundles, definitionMap.keySet(), logDetails);
+    }
+
+    @Override
+    public synchronized void discoverExtensions(final Set<Bundle> narBundles, final Set<Class<?>> extensionTypes, final boolean logDetails) {
         // get the current context class loader
         ClassLoader currentContextClassLoader = Thread.currentThread().getContextClassLoader();
 
@@ -161,7 +169,7 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
             Thread.currentThread().setContextClassLoader(ncl);
 
             final long loadStart = System.currentTimeMillis();
-            loadExtensions(bundle);
+            loadExtensions(bundle, extensionTypes);
             final long loadMillis = System.currentTimeMillis() - loadStart;
             if (logDetails) {
                 logger.info("Loaded extensions for {} in {} millis", bundle.getBundleDetails(), loadMillis);
@@ -178,19 +186,32 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
     }
 
     @Override
-    public void setPythonBridge(final PythonBridge pythonBridge) {
+    public synchronized void setPythonBridge(final PythonBridge pythonBridge) {
         this.pythonBridge = pythonBridge;
     }
 
     @Override
-    public void discoverPythonExtensions(final Bundle pythonBundle) {
+    public synchronized void discoverPythonExtensions(final Bundle pythonBundle) {
         discoverPythonExtensions(pythonBundle, true);
     }
 
     @Override
-    public void discoverNewPythonExtensions(final Bundle pythonBundle) {
+    public synchronized void discoverNewPythonExtensions(final Bundle pythonBundle) {
         logger.debug("Scanning to discover new Python extensions...");
         discoverPythonExtensions(pythonBundle, false);
+    }
+
+    @Override
+    public synchronized void discoverPythonExtensions(final Bundle pythonBundle, final Set<Bundle> bundles) {
+        logger.debug("Scanning to discover which Python extensions are available and importing any necessary dependencies. If new components are discovered, this may take a few minutes. " +
+                "See python logs for more details.");
+        final long start = System.currentTimeMillis();
+        final List<File> bundleWorkingDirectories = bundles.stream()
+                .map(Bundle::getBundleDetails)
+                .map(BundleDetails::getWorkingDirectory)
+                .toList();
+        pythonBridge.discoverExtensions(bundleWorkingDirectories);
+        loadPythonExtensions(pythonBundle, start);
     }
 
     private void discoverPythonExtensions(final Bundle pythonBundle, final boolean includeNarBundles) {
@@ -198,7 +219,10 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
             "See python logs for more details.");
         final long start = System.currentTimeMillis();
         pythonBridge.discoverExtensions(includeNarBundles);
+        loadPythonExtensions(pythonBundle, start);
+    }
 
+    private void loadPythonExtensions(final Bundle pythonBundle, final long startTime) {
         bundleCoordinateBundleLookup.putIfAbsent(pythonBundle.getBundleDetails().getCoordinate(), pythonBundle);
 
         final Set<ExtensionDefinition> processorDefinitions = definitionMap.get(Processor.class);
@@ -209,17 +233,16 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
             final BundleDetails bundleDetails = createBundleDetailsWithOverriddenVersion(pythonBundle.getBundleDetails(), details.getProcessorVersion());
             final Bundle bundle = new Bundle(bundleDetails, pythonBundle.getClassLoader());
 
-            // TODO: This is a workaround because the UI has a bug that causes it not to work properly if the type doesn't have a '.' in it
-            final String className = PYTHON_TYPE_PREFIX + details.getProcessorType();
+            final String className = details.getProcessorType();
             final ExtensionDefinition extensionDefinition = new ExtensionDefinition.Builder()
-                .implementationClassName(className)
-                .runtime(ExtensionRuntime.PYTHON)
-                .bundle(bundle)
-                .extensionType(Processor.class)
-                .description(details.getCapabilityDescription())
-                .tags(details.getTags())
-                .version(details.getProcessorVersion())
-                .build();
+                    .implementationClassName(className)
+                    .runtime(ExtensionRuntime.PYTHON)
+                    .bundle(bundle)
+                    .extensionType(Processor.class)
+                    .description(details.getCapabilityDescription())
+                    .tags(details.getTags())
+                    .version(details.getProcessorVersion())
+                    .build();
 
             final boolean added = processorDefinitions.add(extensionDefinition);
             if (added) {
@@ -227,6 +250,9 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
                 final List<Bundle> bundlesForClass = classNameBundleLookup.computeIfAbsent(className, key -> new ArrayList<>());
                 bundlesForClass.add(bundle);
                 bundleCoordinateBundleLookup.putIfAbsent(bundleDetails.getCoordinate(), bundle);
+
+                final Set<ExtensionDefinition> bundleExtensionDefinitions = bundleCoordinateClassesLookup.computeIfAbsent(bundleDetails.getCoordinate(), (key) -> new HashSet<>());
+                bundleExtensionDefinitions.add(extensionDefinition);
 
                 final List<PythonProcessorDetails> detailsList = this.pythonProcessorDetails.computeIfAbsent(details.getProcessorType(), key -> new ArrayList<>());
                 detailsList.add(details);
@@ -238,16 +264,15 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
         }
 
         if (processorsFound == 0) {
-            logger.debug("Discovered no new or updated Python Processors. Process took in {} millis", System.currentTimeMillis() - start);
+            logger.debug("Discovered no new or updated Python Processors. Process took in {} millis", System.currentTimeMillis() - startTime);
         } else {
-            logger.info("Discovered or updated {} Python Processors in {} millis", processorsFound, System.currentTimeMillis() - start);
+            logger.info("Discovered or updated {} Python Processors in {} millis", processorsFound, System.currentTimeMillis() - startTime);
         }
     }
 
     @Override
-    public PythonProcessorDetails getPythonProcessorDetails(final String processorType, final String version) {
-        final String canonicalProcessorType = stripPythonTypePrefix(processorType);
-        final List<PythonProcessorDetails> detailsList = this.pythonProcessorDetails.get(canonicalProcessorType);
+    public synchronized PythonProcessorDetails getPythonProcessorDetails(final String processorType, final String version) {
+        final List<PythonProcessorDetails> detailsList = this.pythonProcessorDetails.get(processorType);
         if (detailsList == null) {
             return null;
         }
@@ -259,6 +284,24 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
         }
 
         return null;
+    }
+
+    @Override
+    public synchronized Set<ExtensionDefinition> getPythonExtensions(final BundleCoordinate originalBundleCoordinate) {
+        final Set<ExtensionDefinition> pythonProcessorDefinitions = new HashSet<>();
+        for (final ExtensionDefinition processorDefinition : definitionMap.get(Processor.class)) {
+            final PythonProcessorDetails processorDetails = getPythonProcessorDetails(processorDefinition.getImplementationClassName(), processorDefinition.getVersion());
+            if (processorDetails != null) {
+                final PythonBundleCoordinate pythonBundleCoordinate = processorDetails.getBundleCoordinate();
+                if (originalBundleCoordinate.getGroup().equals(pythonBundleCoordinate.getGroup())
+                        && originalBundleCoordinate.getId().equals(pythonBundleCoordinate.getId())
+                        && originalBundleCoordinate.getVersion().equals(pythonBundleCoordinate.getVersion())) {
+                    pythonProcessorDefinitions.add(processorDefinition);
+                }
+            }
+        }
+        logger.trace("Found {} Python Processor definitions loaded from [{}]", pythonProcessorDefinitions.size(), originalBundleCoordinate);
+        return pythonProcessorDefinitions;
     }
 
     private BundleDetails createBundleDetailsWithOverriddenVersion(final BundleDetails details, final String version) {
@@ -282,9 +325,10 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
      * Loads extensions from the specified bundle.
      *
      * @param bundle from which to load extensions
+     * @param extensionTypes the types of extensions to load
      */
-    private void loadExtensions(final Bundle bundle) {
-        for (final Class extensionType : definitionMap.keySet()) {
+    private void loadExtensions(final Bundle bundle, final Set<Class<?>> extensionTypes) {
+        for (final Class extensionType : extensionTypes) {
             final String serviceType = extensionType.getName();
 
             try {
@@ -386,7 +430,7 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
                 initializer.initialize(configurableComponent);
             }
         } catch (final InitializationException e) {
-            logger.warn(String.format("Unable to initialize component %s due to %s", configurableComponent.getClass().getName(), e.getMessage()));
+            logger.warn("Unable to initialize component {} due to {}", configurableComponent.getClass().getName(), e.getMessage());
         }
     }
 
@@ -482,8 +526,8 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
     }
 
     @Override
-    public InstanceClassLoader createInstanceClassLoader(final String classType, final String instanceIdentifier, final Bundle bundle, final Set<URL> additionalUrls, final boolean register,
-                                                         final String classloaderIsolationKey) {
+    public synchronized InstanceClassLoader createInstanceClassLoader(final String classType, final String instanceIdentifier, final Bundle bundle, final Set<URL> additionalUrls,
+                                                                      final boolean register, final String classloaderIsolationKey) {
         if (StringUtils.isEmpty(classType)) {
             throw new IllegalArgumentException("Class-Type is required");
         }
@@ -514,7 +558,7 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
             } else {
                 final BaseClassLoaderKey baseClassLoaderKey = classloaderIsolationKey == null ? null : new BaseClassLoaderKey(bundle, classloaderIsolationKey);
                 final NarClassLoader narBundleClassLoader = (NarClassLoader) bundleClassLoader;
-                logger.debug("Including ClassLoader resources from {} for component {}", new Object[]{bundle.getBundleDetails(), instanceIdentifier});
+                logger.debug("Including ClassLoader resources from {} for component {}", bundle.getBundleDetails(), instanceIdentifier);
 
                 final Set<URL> instanceUrls = new LinkedHashSet<>(Arrays.asList(narBundleClassLoader.getURLs()));
                 final Set<File> narNativeLibDirs = new LinkedHashSet<>();
@@ -571,7 +615,7 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
                     logger.debug("Creating InstanceClassLoader for type {} using newly created shared Base ClassLoader {} for component {}", type, sharedClassLoader, instanceIdentifier);
                     if (logger.isTraceEnabled()) {
                         for (URL url : sharedClassLoader.getURLs()) {
-                            logger.trace("Shared Base ClassLoader URL resource: {}", new Object[] {url.toExternalForm()});
+                            logger.trace("Shared Base ClassLoader URL resource: {}", url.toExternalForm());
                         }
                     }
 
@@ -590,7 +634,7 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
 
         if (logger.isTraceEnabled()) {
             for (URL url : instanceClassLoader.getURLs()) {
-                logger.trace("URL resource {} for {}...", new Object[] {url.toExternalForm(), instanceIdentifier});
+                logger.trace("URL resource {} for {}...", url.toExternalForm(), instanceIdentifier);
             }
         }
 
@@ -627,12 +671,12 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
     }
 
     @Override
-    public InstanceClassLoader getInstanceClassLoader(final String instanceIdentifier) {
+    public synchronized InstanceClassLoader getInstanceClassLoader(final String instanceIdentifier) {
         return instanceClassloaderLookup.get(instanceIdentifier);
     }
 
     @Override
-    public InstanceClassLoader removeInstanceClassLoader(final String instanceIdentifier) {
+    public synchronized InstanceClassLoader removeInstanceClassLoader(final String instanceIdentifier) {
         if (instanceIdentifier == null) {
             return null;
         }
@@ -643,7 +687,7 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
     }
 
     @Override
-    public void registerInstanceClassLoader(final String instanceIdentifier, final InstanceClassLoader instanceClassLoader) {
+    public synchronized void registerInstanceClassLoader(final String instanceIdentifier, final InstanceClassLoader instanceClassLoader) {
         instanceClassloaderLookup.putIfAbsent(instanceIdentifier, instanceClassLoader);
     }
 
@@ -654,13 +698,13 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
             try {
                 urlClassLoader.close();
             } catch (IOException e) {
-                logger.warn("Unable to close URLClassLoader for " + instanceIdentifier);
+                logger.warn("Unable to close URLClassLoader for {}", instanceIdentifier);
             }
         }
     }
 
     @Override
-    public List<Bundle> getBundles(final String classType) {
+    public synchronized List<Bundle> getBundles(final String classType) {
         if (classType == null) {
             throw new IllegalArgumentException("Class type cannot be null");
         }
@@ -670,7 +714,7 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
     }
 
     @Override
-    public Bundle getBundle(final BundleCoordinate bundleCoordinate) {
+    public synchronized Bundle getBundle(final BundleCoordinate bundleCoordinate) {
         if (bundleCoordinate == null) {
             throw new IllegalArgumentException("BundleCoordinate cannot be null");
         }
@@ -678,7 +722,91 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
     }
 
     @Override
-    public Set<ExtensionDefinition> getTypes(final BundleCoordinate bundleCoordinate) {
+    public synchronized Set<Bundle> removeBundles(final Collection<BundleCoordinate> bundleCoordinates) {
+        final Set<Bundle> removedBundles = new LinkedHashSet<>();
+        for (final BundleCoordinate bundleCoordinate : bundleCoordinates) {
+            final Bundle removedBundle = removeBundle(bundleCoordinate);
+            if (removedBundle != null) {
+                removedBundles.add(removedBundle);
+            }
+        }
+        return removedBundles;
+    }
+
+    private Bundle removeBundle(final BundleCoordinate bundleCoordinate) {
+        if (PythonBundle.isPythonCoordinate(bundleCoordinate)) {
+            throw new IllegalStateException("Python bundle [%s] cannot be removed".formatted(bundleCoordinate));
+        }
+
+        final Bundle removedBundle = bundleCoordinateBundleLookup.remove(bundleCoordinate);
+        if (removedBundle == null) {
+            logger.debug("Bundle not found with coordinate [{}]", bundleCoordinate);
+            return null;
+        }
+
+        logger.debug("Removing bundle [{}]", bundleCoordinate);
+        final ClassLoader removedBundleClassLoader = removedBundle.getClassLoader();
+        classLoaderBundleLookup.remove(removedBundleClassLoader);
+
+        if (removedBundleClassLoader instanceof URLClassLoader) {
+            try {
+                ((URLClassLoader) removedBundleClassLoader).close();
+            } catch (final IOException e) {
+                logger.warn("Failed to close ClassLoader for {}", bundleCoordinate, e);
+            }
+        }
+
+        final Set<ExtensionDefinition> extensionDefinitions = new HashSet<>();
+        extensionDefinitions.addAll(Optional.ofNullable(bundleCoordinateClassesLookup.remove(bundleCoordinate)).orElse(Collections.emptySet()));
+        extensionDefinitions.addAll(getPythonExtensions(bundleCoordinate));
+        extensionDefinitions.forEach(this::removeExtensionDefinition);
+
+        return removedBundle;
+    }
+
+    private void removeExtensionDefinition(final ExtensionDefinition extensionDefinition) {
+        // Use the coordinate from the Bundle of the ExtensionDefinition because Python extension definitions will
+        // have a different coordinate from the original bundle being deleted that triggered this method
+        final BundleCoordinate extensionDefinitionCoordinate = extensionDefinition.getBundle().getBundleDetails().getCoordinate();
+        logger.debug("Removing extension definition [{}] from [{}]", extensionDefinition.getImplementationClassName(), extensionDefinitionCoordinate);
+
+        final Set<ExtensionDefinition> definitions = definitionMap.get(extensionDefinition.getExtensionType());
+        if (definitions != null) {
+            definitions.remove(extensionDefinition);
+        }
+
+        final String removeExtensionClassName = extensionDefinition.getImplementationClassName();
+        final List<Bundle> classNameBundles = Optional.ofNullable(classNameBundleLookup.get(removeExtensionClassName)).orElse(Collections.emptyList());
+        classNameBundles.removeIf(bundle -> bundle.getBundleDetails().getCoordinate().equals(extensionDefinitionCoordinate));
+
+        final String tempComponentKey = getClassBundleKey(removeExtensionClassName, extensionDefinitionCoordinate);
+        final ConfigurableComponent removedTempComponent = tempComponentLookup.remove(tempComponentKey);
+
+        if (PythonBundle.isPythonCoordinate(extensionDefinitionCoordinate)) {
+            logger.debug("Removing Python processor type {} - {}", removeExtensionClassName, extensionDefinition.getVersion());
+
+            final List<PythonProcessorDetails> processorDetailsList = Optional.ofNullable(pythonProcessorDetails.get(removeExtensionClassName)).orElse(Collections.emptyList());
+            processorDetailsList.removeIf(processorDetails -> processorDetails.getProcessorType().equals(removeExtensionClassName)
+                    && processorDetails.getProcessorVersion().equals(extensionDefinition.getVersion()));
+
+            if (removedTempComponent != null) {
+                final String pythonTempComponentId = getPythonTempComponentId(removeExtensionClassName);
+                pythonBridge.onProcessorRemoved(pythonTempComponentId, removeExtensionClassName, extensionDefinition.getVersion());
+            }
+            pythonBridge.removeProcessorType(removeExtensionClassName, extensionDefinition.getVersion());
+        }
+    }
+
+    @Override
+    public synchronized Set<Bundle> getDependentBundles(final BundleCoordinate bundleCoordinate) {
+        return getAllBundles().stream()
+                .filter(bundle -> bundle.getBundleDetails().getDependencyCoordinate() != null
+                        && bundle.getBundleDetails().getDependencyCoordinate().equals(bundleCoordinate))
+                .collect(Collectors.toSet());
+    }
+
+    @Override
+    public synchronized Set<ExtensionDefinition> getTypes(final BundleCoordinate bundleCoordinate) {
         if (bundleCoordinate == null) {
             throw new IllegalArgumentException("BundleCoordinate cannot be null");
         }
@@ -687,7 +815,7 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
     }
 
     @Override
-    public Bundle getBundle(final ClassLoader classLoader) {
+    public synchronized Bundle getBundle(final ClassLoader classLoader) {
         if (classLoader == null) {
             throw new IllegalArgumentException("ClassLoader cannot be null");
         }
@@ -695,12 +823,12 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
     }
 
     @Override
-    public Set<ExtensionDefinition> getExtensions(final Class<?> definition) {
+    public synchronized Set<ExtensionDefinition> getExtensions(final Class<?> definition) {
         if (definition == null) {
             throw new IllegalArgumentException("Class cannot be null");
         }
         final Set<ExtensionDefinition> extensions = definitionMap.get(definition);
-        return (extensions == null) ? Collections.emptySet() : extensions;
+        return (extensions == null) ? Collections.emptySet() : new HashSet<>(extensions);
     }
 
     @Override
@@ -729,11 +857,8 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
         try (final NarCloseable narCloseable = NarCloseable.withComponentNarLoader(bundleClassLoader)) {
             final ConfigurableComponent tempComponent;
             if (PythonBundle.isPythonCoordinate(bundle.getBundleDetails().getCoordinate())) {
-                // TODO: This is a workaround due to bug in UI. Fix bug in UI.
-                final String type = stripPythonTypePrefix(classType);
-
-                final String procId = "temp-component-" + type;
-                tempComponent = pythonBridge.createProcessor(procId, type, bundleCoordinate.getVersion(), false, false);
+                final String procId = getPythonTempComponentId(classType);
+                tempComponent = pythonBridge.createProcessor(procId, classType, bundleCoordinate.getVersion(), false, false);
             } else {
                 final Class<?> componentClass = Class.forName(classType, true, bundleClassLoader);
                 tempComponent = (ConfigurableComponent) componentClass.getDeclaredConstructor().newInstance();
@@ -754,15 +879,8 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
         }
     }
 
-    private static String stripPythonTypePrefix(final String value) {
-        if (value == null) {
-            return null;
-        }
-        if (value.startsWith(PYTHON_TYPE_PREFIX)) {
-            return value.substring(PYTHON_TYPE_PREFIX.length());
-        }
-
-        return value;
+    private static String getPythonTempComponentId(final String type) {
+        return "temp-component-" + type;
     }
 
     private static String getClassBundleKey(final String classType, final BundleCoordinate bundleCoordinate) {
@@ -770,11 +888,11 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
     }
 
     @Override
-    public void logClassLoaderMapping() {
+    public synchronized void logClassLoaderMapping() {
         final StringBuilder builder = new StringBuilder();
 
         builder.append("Extension Type Mapping to Bundle:");
-        for (final Map.Entry<Class, Set<ExtensionDefinition>> entry : definitionMap.entrySet()) {
+        for (final Map.Entry<Class<?>, Set<ExtensionDefinition>> entry : definitionMap.entrySet()) {
             builder.append("\n\t=== ").append(entry.getKey().getSimpleName()).append(" Type ===");
 
             for (final ExtensionDefinition extensionDefinition : entry.getValue()) {
@@ -793,11 +911,11 @@ public class StandardExtensionDiscoveringManager implements ExtensionDiscovering
             builder.append("\n\t=== End ").append(entry.getKey().getSimpleName()).append(" types ===");
         }
 
-        logger.info(builder.toString());
+        logger.info("{}", builder);
     }
 
     @Override
-    public void logClassLoaderDetails() {
+    public synchronized void logClassLoaderDetails() {
         if (!logger.isDebugEnabled()) {
             return;
         }

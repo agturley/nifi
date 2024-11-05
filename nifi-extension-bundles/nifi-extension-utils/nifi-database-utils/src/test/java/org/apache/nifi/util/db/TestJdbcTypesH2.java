@@ -16,21 +16,15 @@
  */
 package org.apache.nifi.util.db;
 
-import org.apache.avro.file.DataFileStream;
-import org.apache.avro.generic.GenericDatumReader;
-import org.apache.avro.generic.GenericRecord;
-import org.apache.avro.io.DatumReader;
 import org.apache.nifi.util.file.FileUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -84,7 +78,7 @@ public class TestJdbcTypesH2 {
     }
 
     @Test
-    public void testSQLTypesMapping() throws ClassNotFoundException, SQLException, IOException {
+    public void testSQLTypesMapping() throws SQLException, IOException {
         final Connection con = createConnection(dbPath);
         final Statement st = con.createStatement();
 
@@ -96,41 +90,19 @@ public class TestJdbcTypesH2 {
 
         st.executeUpdate(createTable);
 
-//        st.executeUpdate("insert into users (email, password, activation_code, forgotten_password_code, forgotten_password_time, created, active, home_module_id) "
-//                + " values ('robert.gates@cold.com', '******', 'CAS', 'ounou', '2005-12-09', '2005-12-03', 1, 5)");
-
         st.executeUpdate("insert into users (email, password, activation_code, created, active, somebinary, somebinary2, somebinary3, someblob, someclob) "
                 + " values ('mari.gates@cold.com', '******', 'CAS', '2005-12-03', 3, 0x66FF, 'ABDF', 'EE64', 'BB22', 'CC88')");
 
         final ResultSet resultSet = st.executeQuery("select U.*, ROW_NUMBER() OVER () as rownr from users U");
-//      final ResultSet resultSet = st.executeQuery("select U.active from users U");
-//        final ResultSet resultSet = st.executeQuery("select U.somebinary from users U");
 
         final ByteArrayOutputStream outStream = new ByteArrayOutputStream();
         JdbcCommon.convertToAvroStream(resultSet, outStream, false);
 
         final byte[] serializedBytes = outStream.toByteArray();
         Assertions.assertNotNull(serializedBytes);
-        System.out.println("Avro serialized result size in bytes: " + serializedBytes.length);
 
         st.close();
         con.close();
-
-        // Deserialize bytes to records
-
-        final InputStream instream = new ByteArrayInputStream(serializedBytes);
-
-        final DatumReader<GenericRecord> datumReader = new GenericDatumReader<>();
-        try (final DataFileStream<GenericRecord> dataFileReader = new DataFileStream<>(instream, datumReader)) {
-            GenericRecord record = null;
-            while (dataFileReader.hasNext()) {
-                // Reuse record object by passing it to next(). This saves us from
-                // allocating and garbage collecting many objects for files with
-                // many items.
-                record = dataFileReader.next(record);
-                System.out.println(record);
-            }
-        }
     }
 
     // verify H2 driver loading and get Connections works

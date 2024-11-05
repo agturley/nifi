@@ -131,7 +131,7 @@ public class FileUserGroupProvider implements ConfigurableUserGroupProvider {
             // get the tenants file and ensure it exists
             tenantsFile = new File(tenantsPath.getValue());
             if (!tenantsFile.exists()) {
-                logger.info("Creating new users file at {}", new Object[] {tenantsFile.getAbsolutePath()});
+                logger.info("Creating new users file at {}", tenantsFile.getAbsolutePath());
                 saveTenants(new Tenants());
             }
 
@@ -140,7 +140,7 @@ public class FileUserGroupProvider implements ConfigurableUserGroupProvider {
 
             load();
 
-            logger.info(String.format("Users/Groups file loaded at %s", new Date().toString()));
+            logger.info("Users/Groups file loaded at {}", new Date());
         } catch (SecurityProviderCreationException | JAXBException | IllegalStateException | SAXException e) {
             throw new SecurityProviderCreationException(e);
         }

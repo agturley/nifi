@@ -191,7 +191,7 @@ public class DatabaseParameterProvider extends AbstractParameterProvider impleme
                 }
                 final String query = getQuery(context, tableName, columns, whereClause);
 
-                getLogger().info("Fetching parameters with query: " + query);
+                getLogger().info("Fetching parameters with query: {}", query);
                 try (final ResultSet rs = st.executeQuery(query)) {
                     while (rs.next()) {
                         final String parameterName = rs.getString(parameterNameColumn);
@@ -207,11 +207,11 @@ public class DatabaseParameterProvider extends AbstractParameterProvider impleme
                             parameterGroupName = tableName;
                         }
 
-                        final ParameterDescriptor parameterDescriptor = new ParameterDescriptor.Builder()
-                                .name(parameterName)
-                                .build();
-                        final Parameter parameter = new Parameter(parameterDescriptor, parameterValue);
-
+                        final Parameter parameter = new Parameter.Builder()
+                            .name(parameterName)
+                            .value(parameterValue)
+                            .provided(true)
+                            .build();
                         parameterMap.computeIfAbsent(parameterGroupName, key -> new ArrayList<>()).add(parameter);
                     }
                 }

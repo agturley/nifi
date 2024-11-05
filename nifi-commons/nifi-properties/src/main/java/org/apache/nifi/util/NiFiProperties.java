@@ -39,7 +39,6 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * The NiFiProperties class holds all properties which are needed for various
@@ -72,7 +71,6 @@ public class NiFiProperties extends ApplicationProperties {
     public static final String NAR_LIBRARY_AUTOLOAD_DIRECTORY = "nifi.nar.library.autoload.directory";
     public static final String NAR_WORKING_DIRECTORY = "nifi.nar.working.directory";
     public static final String UNPACK_NARS_TO_UBER_JAR = "nifi.nar.unpack.uber.jar";
-    public static final String COMPONENT_DOCS_DIRECTORY = "nifi.documentation.working.directory";
     public static final String SENSITIVE_PROPS_KEY = "nifi.sensitive.props.key";
     public static final String SENSITIVE_PROPS_ALGORITHM = "nifi.sensitive.props.algorithm";
     public static final String REMOTE_INPUT_HOST = "nifi.remote.input.host";
@@ -86,14 +84,7 @@ public class NiFiProperties extends ApplicationProperties {
     public static final String PROCESSOR_SCHEDULING_TIMEOUT = "nifi.processor.scheduling.timeout";
     public static final String BACKPRESSURE_COUNT = "nifi.queue.backpressure.count";
     public static final String BACKPRESSURE_SIZE = "nifi.queue.backpressure.size";
-    public static final String LISTENER_BOOTSTRAP_PORT = "nifi.listener.bootstrap.port";
-
-    // Encryption Properties for all Repositories
-    public static final String REPOSITORY_ENCRYPTION_PROTOCOL_VERSION = "nifi.repository.encryption.protocol.version";
-    public static final String REPOSITORY_ENCRYPTION_KEY_ID = "nifi.repository.encryption.key.id";
-    public static final String REPOSITORY_ENCRYPTION_KEY_PROVIDER = "nifi.repository.encryption.key.provider";
-    public static final String REPOSITORY_ENCRYPTION_KEY_PROVIDER_KEYSTORE_LOCATION = "nifi.repository.encryption.key.provider.keystore.location";
-    public static final String REPOSITORY_ENCRYPTION_KEY_PROVIDER_KEYSTORE_PASSWORD = "nifi.repository.encryption.key.provider.keystore.password";
+    public static final String UPLOAD_WORKING_DIRECTORY = "nifi.upload.working.directory";
 
     // content repository properties
     public static final String REPOSITORY_CONTENT_PREFIX = "nifi.content.repository.directory.";
@@ -104,7 +95,6 @@ public class NiFiProperties extends ApplicationProperties {
     public static final String CONTENT_ARCHIVE_BACK_PRESSURE_PERCENTAGE = "nifi.content.repository.archive.backpressure.percentage";
     public static final String CONTENT_ARCHIVE_ENABLED = "nifi.content.repository.archive.enabled";
     public static final String CONTENT_ARCHIVE_CLEANUP_FREQUENCY = "nifi.content.repository.archive.cleanup.frequency";
-    public static final String CONTENT_VIEWER_URL = "nifi.content.viewer.url";
 
     // flowfile repository properties
     public static final String FLOWFILE_REPOSITORY_IMPLEMENTATION = "nifi.flowfile.repository.implementation";
@@ -131,6 +121,9 @@ public class NiFiProperties extends ApplicationProperties {
     public static final String PROVENANCE_INDEX_SHARD_SIZE = "nifi.provenance.repository.index.shard.size";
     public static final String PROVENANCE_JOURNAL_COUNT = "nifi.provenance.repository.journal.count";
     public static final String PROVENANCE_REPO_DEBUG_FREQUENCY = "nifi.provenance.repository.debug.frequency";
+
+    public static final String ASSET_MANAGER_IMPLEMENTATION = "nifi.asset.manager.implementation";
+    public static final String ASSET_MANAGER_PREFIX = "nifi.asset.manager.properties.";
 
     // status repository properties
     public static final String COMPONENT_STATUS_REPOSITORY_IMPLEMENTATION = "nifi.components.status.repository.implementation";
@@ -181,12 +174,6 @@ public class NiFiProperties extends ApplicationProperties {
     public static final String SECURITY_USER_OIDC_FALLBACK_CLAIMS_IDENTIFYING_USER = "nifi.security.user.oidc.fallback.claims.identifying.user";
     public static final String SECURITY_USER_OIDC_TOKEN_REFRESH_WINDOW = "nifi.security.user.oidc.token.refresh.window";
 
-    // apache knox
-    public static final String SECURITY_USER_KNOX_URL = "nifi.security.user.knox.url";
-    public static final String SECURITY_USER_KNOX_PUBLIC_KEY = "nifi.security.user.knox.publicKey";
-    public static final String SECURITY_USER_KNOX_COOKIE_NAME = "nifi.security.user.knox.cookieName";
-    public static final String SECURITY_USER_KNOX_AUDIENCES = "nifi.security.user.knox.audiences";
-
     // saml
     public static final String SECURITY_USER_SAML_IDP_METADATA_URL = "nifi.security.user.saml.idp.metadata.url";
     public static final String SECURITY_USER_SAML_SP_ENTITY_ID = "nifi.security.user.saml.sp.entity.id";
@@ -232,7 +219,6 @@ public class NiFiProperties extends ApplicationProperties {
 
     // ui properties
     public static final String UI_BANNER_TEXT = "nifi.ui.banner.text";
-    public static final String UI_AUTO_REFRESH_INTERVAL = "nifi.ui.autorefresh.interval";
 
     // cluster common properties
     public static final String CLUSTER_PROTOCOL_HEARTBEAT_INTERVAL = "nifi.cluster.protocol.heartbeat.interval";
@@ -281,9 +267,6 @@ public class NiFiProperties extends ApplicationProperties {
     public static final String KERBEROS_KRB5_FILE = "nifi.kerberos.krb5.file";
     public static final String KERBEROS_SERVICE_PRINCIPAL = "nifi.kerberos.service.principal";
     public static final String KERBEROS_SERVICE_KEYTAB_LOCATION = "nifi.kerberos.service.keytab.location";
-    public static final String KERBEROS_SPNEGO_PRINCIPAL = "nifi.kerberos.spnego.principal";
-    public static final String KERBEROS_SPNEGO_KEYTAB_LOCATION = "nifi.kerberos.spnego.keytab.location";
-    public static final String KERBEROS_AUTHENTICATION_EXPIRATION = "nifi.kerberos.spnego.authentication.expiration";
 
     // state management
     public static final String STATE_MANAGEMENT_CONFIG_FILE = "nifi.state.management.configuration.file";
@@ -331,6 +314,10 @@ public class NiFiProperties extends ApplicationProperties {
     // kubernetes properties
     public static final String CLUSTER_LEADER_ELECTION_KUBERNETES_LEASE_PREFIX = "nifi.cluster.leader.election.kubernetes.lease.prefix";
 
+    // nar manager properties
+    public static final String NAR_PERSISTENCE_PROVIDER_IMPLEMENTATION_CLASS = "nifi.nar.persistence.provider.implementation";
+    public static final String NAR_PERSISTENCE_PROVIDER_PROPERTIES_PREFIX = "nifi.nar.persistence.provider.properties.";
+
     public static final String DEFAULT_PYTHON_WORKING_DIRECTORY = "./work/python";
 
     // automatic diagnostic defaults
@@ -359,11 +346,10 @@ public class NiFiProperties extends ApplicationProperties {
     public static final String DEFAULT_WEB_REQUEST_TIMEOUT = "60 secs";
     public static final String DEFAULT_NAR_WORKING_DIR = "./work/nar";
     public static final boolean DEFAULT_UNPACK_NARS_TO_UBER_JAR = false;
-    public static final String DEFAULT_COMPONENT_DOCS_DIRECTORY = "./work/docs/components";
     public static final String DEFAULT_NAR_LIBRARY_DIR = "./lib";
     public static final String DEFAULT_NAR_LIBRARY_AUTOLOAD_DIR = "./extensions";
     public static final String DEFAULT_FLOWFILE_CHECKPOINT_INTERVAL = "20 secs";
-    public static final String DEFAULT_MAX_APPENDABLE_CLAIM_SIZE = "1 MB";
+    public static final String DEFAULT_MAX_APPENDABLE_CLAIM_SIZE = "50 KB";
     public static final int DEFAULT_QUEUE_SWAP_THRESHOLD = 20000;
     public static final long DEFAULT_BACKPRESSURE_COUNT = 10_000L;
     public static final String DEFAULT_BACKPRESSURE_SIZE = "1 GB";
@@ -402,8 +388,8 @@ public class NiFiProperties extends ApplicationProperties {
     public static final String DEFAULT_SECURITY_USER_SAML_HTTP_CLIENT_READ_TIMEOUT = "30 secs";
     private static final String DEFAULT_SECURITY_USER_JWS_KEY_ROTATION_PERIOD = "PT1H";
     public static final String DEFAULT_WEB_SHOULD_SEND_SERVER_VERSION = "true";
-    public static final int DEFAULT_LISTENER_BOOTSTRAP_PORT = 0;
     public static final Boolean DEFAULT_FLOW_REGISTRY_CHECK_FOR_RULE_VIOLATIONS_BEFORE_COMMIT = false;
+    public static final String DEFAULT_UPLOAD_WORKING_DIR = "./work/uploads";
 
     // cluster common defaults
     public static final String DEFAULT_CLUSTER_PROTOCOL_HEARTBEAT_INTERVAL = "5 sec";
@@ -764,10 +750,6 @@ public class NiFiProperties extends ApplicationProperties {
         return new File(getProperty(WEB_WORKING_DIR, DEFAULT_WEB_WORKING_DIR));
     }
 
-    public File getComponentDocumentationWorkingDirectory() {
-        return new File(getProperty(COMPONENT_DOCS_DIRECTORY, DEFAULT_COMPONENT_DOCS_DIRECTORY));
-    }
-
     public File getNarWorkingDirectory() {
         return new File(getProperty(NAR_WORKING_DIRECTORY, DEFAULT_NAR_WORKING_DIR));
     }
@@ -817,6 +799,10 @@ public class NiFiProperties extends ApplicationProperties {
         return new File(getProperty(NAR_LIBRARY_AUTOLOAD_DIRECTORY, DEFAULT_NAR_LIBRARY_AUTOLOAD_DIR));
     }
 
+    public File getUploadWorkingDirectory() {
+        return new File(getProperty(UPLOAD_WORKING_DIRECTORY, DEFAULT_UPLOAD_WORKING_DIR));
+    }
+
     // getters for ui properties //
 
     /**
@@ -826,15 +812,6 @@ public class NiFiProperties extends ApplicationProperties {
      */
     public String getBannerText() {
         return this.getProperty(UI_BANNER_TEXT, StringUtils.EMPTY);
-    }
-
-    /**
-     * Returns the auto refresh interval in seconds.
-     *
-     * @return the interval over which the properties should auto refresh
-     */
-    public String getAutoRefreshInterval() {
-        return getProperty(UI_AUTO_REFRESH_INTERVAL);
     }
 
     /**
@@ -980,43 +957,6 @@ public class NiFiProperties extends ApplicationProperties {
         } else {
             return null;
         }
-    }
-
-    public String getKerberosSpnegoPrincipal() {
-        final String spengoPrincipal = getProperty(KERBEROS_SPNEGO_PRINCIPAL);
-        if (!StringUtils.isBlank(spengoPrincipal)) {
-            return spengoPrincipal.trim();
-        } else {
-            return null;
-        }
-    }
-
-    public String getKerberosSpnegoKeytabLocation() {
-        final String keytabLocation = getProperty(KERBEROS_SPNEGO_KEYTAB_LOCATION);
-        if (!StringUtils.isBlank(keytabLocation)) {
-            return keytabLocation.trim();
-        } else {
-            return null;
-        }
-    }
-
-    public String getKerberosAuthenticationExpiration() {
-        final String authenticationExpirationString = getProperty(KERBEROS_AUTHENTICATION_EXPIRATION, DEFAULT_KERBEROS_AUTHENTICATION_EXPIRATION);
-        if (!StringUtils.isBlank(authenticationExpirationString)) {
-            return authenticationExpirationString.trim();
-        } else {
-            return null;
-        }
-    }
-
-    /**
-     * Returns true if the Kerberos service principal and keytab location
-     * properties are populated.
-     *
-     * @return true if Kerberos service support is enabled
-     */
-    public boolean isKerberosSpnegoSupportEnabled() {
-        return !StringUtils.isBlank(getKerberosSpnegoPrincipal()) && !StringUtils.isBlank(getKerberosSpnegoKeytabLocation());
     }
 
     /**
@@ -1190,57 +1130,6 @@ public class NiFiProperties extends ApplicationProperties {
     }
 
     /**
-     * Returns whether Knox SSO is enabled.
-     *
-     * @return whether Knox SSO is enabled
-     */
-    public boolean isKnoxSsoEnabled() {
-        return !StringUtils.isBlank(getKnoxUrl());
-    }
-
-    /**
-     * Returns the Knox URL.
-     *
-     * @return Knox URL
-     */
-    public String getKnoxUrl() {
-        return getProperty(SECURITY_USER_KNOX_URL);
-    }
-
-    /**
-     * Gets the configured Knox Audiences.
-     *
-     * @return Knox audiences
-     */
-    public Set<String> getKnoxAudiences() {
-        final String rawAudiences = getProperty(SECURITY_USER_KNOX_AUDIENCES);
-        if (StringUtils.isBlank(rawAudiences)) {
-            return null;
-        } else {
-            final String[] audienceTokens = rawAudiences.split(",");
-            return Stream.of(audienceTokens).map(String::trim).filter(aud -> !StringUtils.isEmpty(aud)).collect(Collectors.toSet());
-        }
-    }
-
-    /**
-     * Returns the path to the Knox public key.
-     *
-     * @return path to the Knox public key
-     */
-    public Path getKnoxPublicKeyPath() {
-        return Paths.get(getProperty(SECURITY_USER_KNOX_PUBLIC_KEY));
-    }
-
-    /**
-     * Returns the name of the Knox cookie.
-     *
-     * @return name of the Knox cookie
-     */
-    public String getKnoxCookieName() {
-        return getProperty(SECURITY_USER_KNOX_COOKIE_NAME);
-    }
-
-    /**
      * Returns whether SAML is enabled.
      *
      * @return whether saml is enabled
@@ -1394,7 +1283,6 @@ public class NiFiProperties extends ApplicationProperties {
      * - login identity provider is not populated
      * - Kerberos service support is not enabled
      * - openid connect is not enabled
-     * - knox sso is not enabled
      * - anonymous authentication is not enabled
      * </p>
      *
@@ -1402,9 +1290,7 @@ public class NiFiProperties extends ApplicationProperties {
      */
     public boolean isClientAuthRequiredForRestApi() {
         return !isLoginIdentityProviderEnabled()
-                && !isKerberosSpnegoSupportEnabled()
                 && !isOidcEnabled()
-                && !isKnoxSsoEnabled()
                 && !isSamlEnabled()
                 && !isAnonymousAuthenticationAllowed();
     }
@@ -1690,10 +1576,6 @@ public class NiFiProperties extends ApplicationProperties {
                 && getProperty(SECURITY_TRUSTSTORE_PASSWD) != null;
     }
 
-    public String getRepositoryEncryptionKeyId() {
-        return getProperty(REPOSITORY_ENCRYPTION_KEY_ID);
-    }
-
     /**
      * Returns the allowed proxy hostnames (and IP addresses) as a List. The hosts have been normalized to the form {@code somehost.com}, {@code somehost.com:port}, or {@code 127.0.0.1}.
      *
@@ -1767,10 +1649,6 @@ public class NiFiProperties extends ApplicationProperties {
 
     public String getDefaultBackPressureDataSizeThreshold() {
         return getProperty(BACKPRESSURE_SIZE, DEFAULT_BACKPRESSURE_SIZE);
-    }
-
-    public int getDefaultListenerBootstrapPort() {
-        return getIntegerProperty(LISTENER_BOOTSTRAP_PORT, DEFAULT_LISTENER_BOOTSTRAP_PORT);
     }
 
     /**

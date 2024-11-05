@@ -93,11 +93,9 @@ public class MiNiFiPropertiesGenerator {
             "# If a component has no work to do (is \"bored\"), how long should we wait before checking again for work"),
         Triple.of(NiFiProperties.LOGIN_IDENTITY_PROVIDER_CONFIGURATION_FILE, "./conf/login-identity-providers.xml", EMPTY),
         Triple.of(NiFiProperties.UI_BANNER_TEXT, EMPTY, EMPTY),
-        Triple.of(NiFiProperties.UI_AUTO_REFRESH_INTERVAL, "30 sec", EMPTY),
         Triple.of(NiFiProperties.NAR_LIBRARY_DIRECTORY, "./lib", EMPTY),
         Triple.of(NiFiProperties.NAR_WORKING_DIRECTORY, "./work/nar/", EMPTY),
         Triple.of(NiFiProperties.NAR_LIBRARY_AUTOLOAD_DIRECTORY, "./extensions", EMPTY),
-        Triple.of(NiFiProperties.COMPONENT_DOCS_DIRECTORY, "./work/docs/components", EMPTY),
         Triple.of(NiFiProperties.STATE_MANAGEMENT_CONFIG_FILE, "./conf/state-management.xml", "# State Management"),
         Triple.of(NiFiProperties.STATE_MANAGEMENT_LOCAL_PROVIDER_ID, "local-provider", "# The ID of the local state provider"),
         Triple.of(NiFiProperties.REPOSITORY_DATABASE_DIRECTORY, "./database_repository", "# H2 Settings"),
@@ -141,19 +139,15 @@ public class MiNiFiPropertiesGenerator {
         Triple.of(NiFiProperties.FLOW_CONFIGURATION_FILE, "./conf/flow.json.gz", EMPTY)
     );
 
-    static final String PROTECTED_POSTFIX = ".protected";
     static final Map<String, String> MINIFI_TO_NIFI_PROPERTY_MAPPING = Map.ofEntries(
         entry(MiNiFiProperties.NIFI_MINIFI_FLOW_CONFIG.getKey(), NiFiProperties.FLOW_CONFIGURATION_FILE),
         entry(MiNiFiProperties.NIFI_MINIFI_SECURITY_KEYSTORE.getKey(), NiFiProperties.SECURITY_KEYSTORE),
         entry(MiNiFiProperties.NIFI_MINIFI_SECURITY_KEYSTORE_TYPE.getKey(), NiFiProperties.SECURITY_KEYSTORE_TYPE),
         entry(MiNiFiProperties.NIFI_MINIFI_SECURITY_KEYSTORE_PASSWD.getKey(), NiFiProperties.SECURITY_KEYSTORE_PASSWD),
-        entry(MiNiFiProperties.NIFI_MINIFI_SECURITY_KEYSTORE_PASSWD.getKey() + PROTECTED_POSTFIX, NiFiProperties.SECURITY_KEYSTORE_PASSWD + PROTECTED_POSTFIX),
         entry(MiNiFiProperties.NIFI_MINIFI_SECURITY_KEY_PASSWD.getKey(), NiFiProperties.SECURITY_KEY_PASSWD),
-        entry(MiNiFiProperties.NIFI_MINIFI_SECURITY_KEY_PASSWD.getKey() + PROTECTED_POSTFIX, NiFiProperties.SECURITY_KEY_PASSWD + PROTECTED_POSTFIX),
         entry(MiNiFiProperties.NIFI_MINIFI_SECURITY_TRUSTSTORE.getKey(), NiFiProperties.SECURITY_TRUSTSTORE),
         entry(MiNiFiProperties.NIFI_MINIFI_SECURITY_TRUSTSTORE_TYPE.getKey(), NiFiProperties.SECURITY_TRUSTSTORE_TYPE),
-        entry(MiNiFiProperties.NIFI_MINIFI_SECURITY_TRUSTSTORE_PASSWD.getKey(), NiFiProperties.SECURITY_TRUSTSTORE_PASSWD),
-        entry(MiNiFiProperties.NIFI_MINIFI_SECURITY_TRUSTSTORE_PASSWD.getKey() + PROTECTED_POSTFIX, NiFiProperties.SECURITY_TRUSTSTORE_PASSWD + PROTECTED_POSTFIX)
+        entry(MiNiFiProperties.NIFI_MINIFI_SECURITY_TRUSTSTORE_PASSWD.getKey(), NiFiProperties.SECURITY_TRUSTSTORE_PASSWD)
     );
 
     static final String DEFAULT_SENSITIVE_PROPERTIES_ENCODING_ALGORITHM = "NIFI_PBKDF2_AES_GCM_256";

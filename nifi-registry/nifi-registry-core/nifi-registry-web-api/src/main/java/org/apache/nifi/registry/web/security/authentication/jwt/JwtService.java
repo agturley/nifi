@@ -76,7 +76,6 @@ public class JwtService {
             }
             return jws.getPayload().getSubject();
         } catch (JwtException e) {
-            logger.debug("The Base64 encoded JWT: " + base64EncodedToken);
             final String errorMessage = "There was an error validating the JWT";
             logger.error(errorMessage, e);
             throw e;
@@ -149,8 +148,6 @@ public class JwtService {
             final Key key = keyService.getOrCreateKey(identity);
             final byte[] keyBytes = key.getKey().getBytes(StandardCharsets.UTF_8);
 
-            //logger.trace("Generating JWT for " + describe(authenticationResponse));
-
             // TODO: Implement "jti" claim with nonce to prevent replay attacks and allow blacklisting of revoked tokens
             // Build the token
             return Jwts.builder().subject(identity)
@@ -178,7 +175,7 @@ public class JwtService {
             keyService.deleteKey(userIdentity);
             logger.info("Deleted token from database.");
         } catch (Exception e) {
-            logger.error("Unable to delete token for user: [" + userIdentity + "].");
+            logger.error("Unable to delete token for user: [{}].", userIdentity);
             throw e;
         }
     }
@@ -188,12 +185,10 @@ public class JwtService {
         final long minExpiration = TimeUnit.MILLISECONDS.convert(1, TimeUnit.MINUTES);
 
         if (proposedTokenExpiration > maxExpiration) {
-            logger.warn(String.format("Max token expiration exceeded. Setting expiration to %s from %s for %s", maxExpiration,
-                    proposedTokenExpiration, identity));
+            logger.warn("Max token expiration exceeded. Setting expiration to {} from {} for {}", maxExpiration, proposedTokenExpiration, identity);
             proposedTokenExpiration = maxExpiration;
         } else if (proposedTokenExpiration < minExpiration) {
-            logger.warn(String.format("Min token expiration not met. Setting expiration to %s from %s for %s", minExpiration,
-                    proposedTokenExpiration, identity));
+            logger.warn("Min token expiration not met. Setting expiration to {} from {} for {}", minExpiration, proposedTokenExpiration, identity);
             proposedTokenExpiration = minExpiration;
         }
 

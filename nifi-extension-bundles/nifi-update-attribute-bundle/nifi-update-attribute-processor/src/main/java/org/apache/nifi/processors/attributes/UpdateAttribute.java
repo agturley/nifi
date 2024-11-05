@@ -524,7 +524,7 @@ public class UpdateAttribute extends AbstractProcessor implements Searchable {
                 }
 
                 if (debugEnabled) {
-                    logger.debug("Updated attributes for {}; transferring to '{}'", new Object[]{match, REL_SUCCESS.getName()});
+                    logger.debug("Updated attributes for {}; transferring to '{}'", match, REL_SUCCESS.getName());
                 }
 
                 // add the match to the list to transfer
@@ -535,7 +535,7 @@ public class UpdateAttribute extends AbstractProcessor implements Searchable {
             incomingFlowFile = executeActions(session, context, null, defaultActions, incomingFlowFile, stateInitialAttributes, stateWorkingAttributes);
 
             if (debugEnabled) {
-                logger.debug("Updated attributes for {}; transferring to '{}'", new Object[]{incomingFlowFile, REL_SUCCESS.getName()});
+                logger.debug("Updated attributes for {}; transferring to '{}'", incomingFlowFile, REL_SUCCESS.getName());
             }
 
             // add the flowfile to the list to transfer
@@ -550,7 +550,7 @@ public class UpdateAttribute extends AbstractProcessor implements Searchable {
                     boolean setState = session.replaceState(stateMap, stateWorkingAttributes, Scope.LOCAL);
                     if (!setState) {
                         logger.warn("Failed to update the state after successfully processing {} due to having an old version of the StateMap. This is normally due to multiple threads running at " +
-                                "once; transferring to '{}'", new Object[]{incomingFlowFile, REL_FAILED_SET_STATE.getName()});
+                                "once; transferring to '{}'", incomingFlowFile, REL_FAILED_SET_STATE.getName());
 
                         flowFilesToTransfer.remove(incomingFlowFile);
                         if (flowFilesToTransfer.size() > 0) {
@@ -613,7 +613,7 @@ public class UpdateAttribute extends AbstractProcessor implements Searchable {
 
                 // log if appropriate
                 if (debugEnabled) {
-                    logger.debug(this + " all conditions met for rule '" + rule.getName() + "'. Using flow file - " + flowfileToUse);
+                    logger.debug("{} all conditions met for rule '{}'. Using flow file - {}", this, rule.getName(), flowfileToUse);
                 }
             }
         }
@@ -645,7 +645,7 @@ public class UpdateAttribute extends AbstractProcessor implements Searchable {
             // evaluate the expression for the given flow file
             return getPropertyValue(condition.getExpression(), context).evaluateAttributeExpressions(flowfile, null, null, statefulAttributes).asBoolean();
         } catch (final Exception e) {
-            getLogger().error(String.format("Could not evaluate the condition '%s' while processing Flowfile '%s'", condition.getExpression(), flowfile));
+            getLogger().error("Could not evaluate the condition '{}' while processing Flowfile '{}'", condition.getExpression(), flowfile);
             throw new ProcessException(String.format("Unable to evaluate condition '%s': %s.", condition.getExpression(), e), e);
         }
     }
@@ -700,7 +700,7 @@ public class UpdateAttribute extends AbstractProcessor implements Searchable {
 
                                 // log if appropriate
                                 if (debugEnabled) {
-                                    logger.debug(String.format("%s deleting attribute '%s' for %s per regex '%s'.", this, key, flowfile, regex));
+                                    logger.debug("{} deleting attribute '{}' for {} per regex '{}'.", this, key, flowfile, regex);
                                 }
 
                                 attributesToDelete.add(key);
@@ -710,7 +710,7 @@ public class UpdateAttribute extends AbstractProcessor implements Searchable {
                         attributesToUpdate.keySet().removeAll(attributesToDelete);
                     }
                 } catch (final Exception e) {
-                    logger.error(String.format("Unable to delete attribute '%s' while processing FlowFile '%s' .", attribute, flowfile));
+                    logger.error("Unable to delete attribute '{}' while processing FlowFile '{}' .", attribute, flowfile);
                     throw new ProcessException(String.format("Unable to delete attribute '%s': %s.", attribute, e), e);
                 }
             } else {
@@ -724,7 +724,7 @@ public class UpdateAttribute extends AbstractProcessor implements Searchable {
 
                         // log if appropriate
                         if (debugEnabled) {
-                            logger.debug(String.format("%s setting attribute '%s' = '%s' for %s per rule '%s'.", this, attribute, newAttributeValue, flowfile, ruleName));
+                            logger.debug("{} setting attribute '{}' = '{}' for {} per rule '{}'.", this, attribute, newAttributeValue, flowfile, ruleName);
                         }
 
                         if (setStatefulAttribute) {
@@ -737,8 +737,7 @@ public class UpdateAttribute extends AbstractProcessor implements Searchable {
                         }
                         // Capture Exception thrown when evaluating the Expression Language
                     } catch (final Exception e) {
-                        logger.error(String.format("Could not evaluate the FlowFile '%s' against expression '%s' " +
-                                "defined by DynamicProperty '%s' due to '%s'", flowfile, action.getValue(), attribute, e.getLocalizedMessage()));
+                        logger.error("Could not evaluate the FlowFile '{}' against expression '{}' defined by DynamicProperty '{}'", flowfile, action.getValue(), attribute, e);
                         throw new ProcessException(String.format("Unable to evaluate new value for attribute '%s': %s.", attribute, e), e);
                     }
                 }

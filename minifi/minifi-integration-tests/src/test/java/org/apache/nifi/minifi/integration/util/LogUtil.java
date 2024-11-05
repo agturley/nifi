@@ -49,7 +49,7 @@ public class LogUtil {
                     .collect(Collectors.toList());
         }
         DockerPort dockerPort = container.port(8000);
-        logger.info("Connecting to external port {} for docker internal port of {}", new Object[]{dockerPort.getExternalPort(), dockerPort.getInternalPort()});
+        logger.info("Connecting to external port {} for docker internal port of {}", dockerPort.getExternalPort(), dockerPort.getInternalPort());
         URL url = URI.create("http://" + dockerPort.getIp() + ":" + dockerPort.getExternalPort()).toURL();
         HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
         try (InputStream inputStream = urlConnection.getInputStream();
@@ -61,9 +61,9 @@ public class LogUtil {
                 int occurrences = 0;
                 while ((line = bufferedReader.readLine()) != null) {
                     if (expectedLogEntry.pattern.matcher(line).find()) {
-                        logger.info("Found expected: " + line);
+                        logger.info("Found expected: {}", line);
                         if (++occurrences >= expectedLogEntry.numOccurrences) {
-                            logger.info("Found target " + occurrences + " times");
+                            logger.info("Found target {} times", occurrences);
                             satisfied = true;
                             break;
                         }

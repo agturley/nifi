@@ -16,10 +16,6 @@
  */
 package org.apache.nifi.web.api;
 
-import java.net.URI;
-import java.util.HashMap;
-import java.util.Map;
-
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -54,11 +50,18 @@ import org.apache.nifi.web.api.entity.ComponentEntity;
 import org.apache.nifi.web.api.entity.LineageEntity;
 import org.apache.nifi.web.api.entity.ProvenanceEntity;
 import org.apache.nifi.web.api.entity.ProvenanceOptionsEntity;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Controller;
+
+import java.net.URI;
+import java.util.HashMap;
+import java.util.Map;
 
 
 /**
  * RESTful endpoint for querying data provenance.
  */
+@Controller
 @Path("/provenance")
 @Tag(name = "Provenance")
 public class ProvenanceResource extends ApplicationResource {
@@ -602,12 +605,12 @@ public class ProvenanceResource extends ApplicationResource {
         );
     }
 
-    // setters
-
+    @Autowired
     public void setServiceFacade(NiFiServiceFacade serviceFacade) {
         this.serviceFacade = serviceFacade;
     }
 
+    @Autowired
     public void setAuthorizer(Authorizer authorizer) {
         this.authorizer = authorizer;
     }

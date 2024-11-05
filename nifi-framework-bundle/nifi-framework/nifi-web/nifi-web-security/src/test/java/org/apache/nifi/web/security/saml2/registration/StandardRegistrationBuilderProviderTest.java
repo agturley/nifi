@@ -20,10 +20,11 @@ import okhttp3.HttpUrl;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.apache.commons.io.IOUtils;
-import org.apache.nifi.security.util.SslContextFactory;
-import org.apache.nifi.security.util.TemporaryKeyStoreBuilder;
-import org.apache.nifi.security.util.TlsConfiguration;
-import org.apache.nifi.security.util.TlsException;
+import org.apache.nifi.security.cert.builder.StandardCertificateBuilder;
+import org.apache.nifi.security.ssl.EphemeralKeyStoreBuilder;
+import org.apache.nifi.security.ssl.StandardKeyManagerBuilder;
+import org.apache.nifi.security.ssl.StandardSslContextBuilder;
+import org.apache.nifi.security.ssl.StandardTrustManagerBuilder;
 import org.apache.nifi.util.NiFiProperties;
 import org.apache.nifi.web.security.saml2.SamlConfigurationException;
 import org.junit.jupiter.api.AfterEach;
@@ -32,11 +33,22 @@ import org.junit.jupiter.api.Test;
 import org.springframework.security.saml2.provider.service.registration.RelyingPartyRegistration;
 import org.springframework.security.saml2.provider.service.registration.Saml2MessageBinding;
 
+import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.X509KeyManager;
+import javax.net.ssl.X509TrustManager;
+import javax.security.auth.x500.X500Principal;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.KeyStore;
+import java.security.cert.Certificate;
+import java.security.cert.X509Certificate;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.Properties;
 
@@ -70,7 +82,7 @@ class StandardRegistrationBuilderProviderTest {
     void testGetRegistrationBuilderFileUrl() {
         final NiFiProperties properties = getProperties(getFileMetadataUrl());
 
-        assertRegistrationFound(properties);
+        assertRegistrationFound(properties, null, null);
     }
 
     @Test
@@ -82,7 +94,7 @@ class StandardRegistrationBuilderProviderTest {
 
         final NiFiProperties properties = getProperties(metadataUrl);
 
-        assertRegistrationFound(properties);
+        assertRegistrationFound(properties, null, null);
     }
 
     @Test
@@ -93,16 +105,29 @@ class StandardRegistrationBuilderProviderTest {
 
         final NiFiProperties properties = getProperties(metadataUrl);
 
-        final StandardRegistrationBuilderProvider provider = new StandardRegistrationBuilderProvider(properties);
+        final StandardRegistrationBuilderProvider provider = new StandardRegistrationBuilderProvider(properties, null, null);
 
         final SamlConfigurationException exception = assertThrows(SamlConfigurationException.class, provider::getRegistrationBuilder);
         assertTrue(exception.getMessage().contains(Integer.toString(HTTP_NOT_FOUND)));
     }
 
     @Test
-    void testGetRegistrationBuilderHttpsUrl() throws IOException, TlsException {
-        final TlsConfiguration tlsConfiguration = new TemporaryKeyStoreBuilder().build();
-        final SSLSocketFactory sslSocketFactory = Objects.requireNonNull(SslContextFactory.createSSLSocketFactory(tlsConfiguration));
+    void testGetRegistrationBuilderHttpsUrl() throws Exception {
+        final KeyStore keyStore = getKeyStore();
+        final char[] protectionParameter = new char[]{};
+
+        final X509KeyManager keyManager = new StandardKeyManagerBuilder()
+                .keyStore(keyStore)
+                .keyPassword(protectionParameter)
+                .build();
+        final X509TrustManager trustManager = new StandardTrustManagerBuilder().trustStore(keyStore).build();
+        final SSLContext sslContext = new StandardSslContextBuilder()
+                .keyManager(keyManager)
+                .keyPassword(protectionParameter)
+                .trustManager(trustManager)
+                .build();
+
+        final SSLSocketFactory sslSocketFactory = Objects.requireNonNull(sslContext.getSocketFactory());
         mockWebServer.useHttps(sslSocketFactory, PROXY_DISABLED);
 
         final String metadata = getMetadata();
@@ -110,9 +135,9 @@ class StandardRegistrationBuilderProviderTest {
         mockWebServer.enqueue(response);
         final String metadataUrl = getMetadataUrl();
 
-        final NiFiProperties properties = getProperties(metadataUrl, tlsConfiguration);
+        final NiFiProperties properties = getPropertiesTrustStoreStrategy(metadataUrl);
 
-        assertRegistrationFound(properties);
+        assertRegistrationFound(properties, keyManager, trustManager);
     }
 
     private String getMetadataUrl() {
@@ -120,12 +145,20 @@ class StandardRegistrationBuilderProviderTest {
         return url.toString();
     }
 
-    private void assertRegistrationFound(final NiFiProperties properties) {
-        final StandardRegistrationBuilderProvider provider = new StandardRegistrationBuilderProvider(properties);
+    private void assertRegistrationFound(final NiFiProperties properties, final X509KeyManager keyManager, final X509TrustManager trustManager) {
+        final StandardRegistrationBuilderProvider provider = new StandardRegistrationBuilderProvider(properties, keyManager, trustManager);
         final RelyingPartyRegistration.Builder builder = provider.getRegistrationBuilder();
 
         final RelyingPartyRegistration registration = builder.build();
         assertEquals(Saml2MessageBinding.POST, registration.getAssertionConsumerServiceBinding());
+    }
+
+    private KeyStore getKeyStore() throws GeneralSecurityException {
+        final KeyPair keyPair = KeyPairGenerator.getInstance("RSA").generateKeyPair();
+        final X509Certificate certificate = new StandardCertificateBuilder(keyPair, new X500Principal("CN=localhost"), Duration.ofHours(1)).build();
+        return new EphemeralKeyStoreBuilder()
+                .addPrivateKeyEntry(new KeyStore.PrivateKeyEntry(keyPair.getPrivate(), new Certificate[]{certificate}))
+                .build();
     }
 
     private NiFiProperties getProperties(final String metadataUrl) {
@@ -134,18 +167,10 @@ class StandardRegistrationBuilderProviderTest {
         return NiFiProperties.createBasicNiFiProperties(null, properties);
     }
 
-    private NiFiProperties getProperties(final String metadataUrl, final TlsConfiguration tlsConfiguration) {
+    private NiFiProperties getPropertiesTrustStoreStrategy(final String metadataUrl) {
         final Properties properties = new Properties();
         properties.setProperty(NiFiProperties.SECURITY_USER_SAML_IDP_METADATA_URL, metadataUrl);
         properties.setProperty(NiFiProperties.SECURITY_USER_SAML_HTTP_CLIENT_TRUSTSTORE_STRATEGY, StandardRegistrationBuilderProvider.NIFI_TRUST_STORE_STRATEGY);
-
-        properties.setProperty(NiFiProperties.SECURITY_KEYSTORE, tlsConfiguration.getKeystorePath());
-        properties.setProperty(NiFiProperties.SECURITY_KEYSTORE_TYPE, tlsConfiguration.getKeystoreType().getType());
-        properties.setProperty(NiFiProperties.SECURITY_KEYSTORE_PASSWD, tlsConfiguration.getKeystorePassword());
-        properties.setProperty(NiFiProperties.SECURITY_KEY_PASSWD, tlsConfiguration.getKeyPassword());
-        properties.setProperty(NiFiProperties.SECURITY_TRUSTSTORE, tlsConfiguration.getTruststorePath());
-        properties.setProperty(NiFiProperties.SECURITY_TRUSTSTORE_TYPE, tlsConfiguration.getTruststoreType().getType());
-        properties.setProperty(NiFiProperties.SECURITY_TRUSTSTORE_PASSWD, tlsConfiguration.getTruststorePassword());
 
         return NiFiProperties.createBasicNiFiProperties(null, properties);
     }

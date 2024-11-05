@@ -319,7 +319,7 @@ public class StandardParameterProviderNode extends AbstractComponentNode impleme
                     }
 
                     if (parameter.getValue() == null) {
-                        getLogger().warn("Skipping parameter [{}], which is missing a value", new Object[] {parameterName});
+                        getLogger().warn("Skipping parameter [{}], which is missing a value", parameterName);
                         continue;
                     }
 
@@ -328,7 +328,7 @@ public class StandardParameterProviderNode extends AbstractComponentNode impleme
                         parameterNames.add(parameter.getDescriptor().getName());
                     } else {
                         getLogger().warn("Skipping parameter [{}], whose name has invalid characters.  Only alpha-numeric characters (a-z, A-Z, 0-9), hyphens (-), underscores (_), " +
-                                "periods (.), and spaces ( ) are accepted.", new Object[] {parameterName});
+                                "periods (.), and spaces ( ) are accepted.", parameterName);
                     }
                 }
                 this.fetchedParameterGroups.add(new ParameterGroup(groupName, toProvidedParameters(validParameters)));
@@ -336,6 +336,20 @@ public class StandardParameterProviderNode extends AbstractComponentNode impleme
             }
         } finally {
             writeLock.unlock();
+        }
+    }
+
+    @Override
+    public Optional<ParameterGroup> findFetchedParameterGroup(final String parameterGroupName) {
+        Objects.requireNonNull(parameterGroupName, "Parameter Group Name required");
+
+        readLock.lock();
+        try {
+            return fetchedParameterGroups.stream()
+                    .filter(parameterGroup -> parameterGroup.getGroupName().equals(parameterGroupName))
+                    .findFirst();
+        } finally {
+            readLock.unlock();
         }
     }
 
@@ -501,8 +515,7 @@ public class StandardParameterProviderNode extends AbstractComponentNode impleme
                     if (isSensitivityChanged) {
                         final ParameterSensitivity currentSensitivity = currentParameter.getDescriptor().isSensitive() ? ParameterSensitivity.SENSITIVE : ParameterSensitivity.NON_SENSITIVE;
                         final ParameterSensitivity fetchedSensitivity = fetchedParameter.getDescriptor().isSensitive() ? ParameterSensitivity.SENSITIVE : ParameterSensitivity.NON_SENSITIVE;
-                        getLogger().info("Parameter [{}] sensitivity is being changed from {} to {}", new Object[] {descriptor.getName(),
-                                currentSensitivity.getName(), fetchedSensitivity.getName()});
+                        getLogger().info("Parameter [{}] sensitivity is being changed from {} to {}", descriptor.getName(), currentSensitivity.getName(), fetchedSensitivity.getName());
                     }
                 }
             }
@@ -529,12 +542,12 @@ public class StandardParameterProviderNode extends AbstractComponentNode impleme
                         throw new IllegalArgumentException(String.format("Parameter sensitivity must be specified for parameter [%s] in group [%s]",
                                 parameterName, groupConfiguration.getGroupName()));
                     }
-                    final ParameterDescriptor parameterDescriptor = new ParameterDescriptor.Builder()
-                            .from(parameter.getDescriptor())
-                            .name(parameterName)
-                            .sensitive(sensitivity == ParameterSensitivity.SENSITIVE)
-                            .build();
-                    return new Parameter(parameterDescriptor, parameter.getValue(), parameter.getParameterContextId(), true);
+
+                    return new Parameter.Builder()
+                        .fromParameter(parameter)
+                        .sensitive(sensitivity == ParameterSensitivity.SENSITIVE)
+                        .provided(true)
+                        .build();
                 })
                 .collect(Collectors.toList());
     }
@@ -546,7 +559,7 @@ public class StandardParameterProviderNode extends AbstractComponentNode impleme
      */
     private static List<Parameter> toProvidedParameters(final Collection<Parameter> parameters) {
         return parameters == null ? Collections.emptyList() : parameters.stream()
-                .map(parameter -> new Parameter(parameter.getDescriptor(), parameter.getValue(), null, true))
+                .map(parameter -> new Parameter.Builder().descriptor(parameter.getDescriptor()).value(parameter.getValue()).provided(true).build())
                 .collect(Collectors.toList());
     }
 

@@ -18,12 +18,15 @@
 package org.apache.nifi.controller.serialization;
 
 import org.apache.commons.collections4.CollectionUtils;
+import org.apache.nifi.asset.Asset;
+import org.apache.nifi.asset.AssetManager;
 import org.apache.nifi.authorization.Authorizer;
 import org.apache.nifi.authorization.AuthorizerCapabilityDetection;
 import org.apache.nifi.authorization.ManagedAuthorizer;
 import org.apache.nifi.bundle.BundleCoordinate;
 import org.apache.nifi.cluster.protocol.DataFlow;
 import org.apache.nifi.cluster.protocol.StandardDataFlow;
+import org.apache.nifi.components.validation.ValidationStatus;
 import org.apache.nifi.connectable.Connectable;
 import org.apache.nifi.connectable.Position;
 import org.apache.nifi.controller.AbstractComponentNode;
@@ -45,13 +48,12 @@ import org.apache.nifi.controller.inheritance.BundleCompatibilityCheck;
 import org.apache.nifi.controller.inheritance.ConnectionMissingCheck;
 import org.apache.nifi.controller.inheritance.FlowInheritability;
 import org.apache.nifi.controller.inheritance.FlowInheritabilityCheck;
-import org.apache.nifi.controller.inheritance.MissingComponentsCheck;
-import org.apache.nifi.controller.reporting.ReportingTaskInstantiationException;
 import org.apache.nifi.controller.service.ControllerServiceNode;
 import org.apache.nifi.encrypt.PropertyEncryptor;
 import org.apache.nifi.flow.Bundle;
 import org.apache.nifi.flow.ExecutionEngine;
 import org.apache.nifi.flow.ScheduledState;
+import org.apache.nifi.flow.VersionedAsset;
 import org.apache.nifi.flow.VersionedComponent;
 import org.apache.nifi.flow.VersionedControllerService;
 import org.apache.nifi.flow.VersionedExternalFlow;
@@ -77,6 +79,7 @@ import org.apache.nifi.parameter.Parameter;
 import org.apache.nifi.parameter.ParameterContext;
 import org.apache.nifi.parameter.ParameterContextManager;
 import org.apache.nifi.parameter.ParameterDescriptor;
+import org.apache.nifi.parameter.ParameterGroup;
 import org.apache.nifi.parameter.ParameterProviderConfiguration;
 import org.apache.nifi.parameter.StandardParameterProviderConfiguration;
 import org.apache.nifi.persistence.FlowConfigurationArchiveManager;
@@ -110,16 +113,19 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import java.util.zip.GZIPInputStream;
 
 import static org.apache.nifi.controller.serialization.FlowSynchronizationUtils.createBundleCoordinate;
@@ -150,11 +156,9 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
         final ProcessGroup root = flowManager.getRootGroup();
 
         // handle corner cases involving no proposed flow
-        if (proposedFlow == null) {
-            if (root.isEmpty()) {
-                return;  // no sync to perform
-            } else {
-                throw new UninheritableFlowException("Proposed configuration is empty, but the controller contains a data flow.");
+        if (isFlowEmpty(proposedFlow)) {
+            if (!root.isEmpty()) {
+                throw new UninheritableFlowException("Attempted to inherit an empty flow, but this NiFi instance already has a flow loaded.");
             }
         }
 
@@ -167,19 +171,12 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
 
         // If bundle update strategy is configured to allow for compatible bundles, update any components to use compatible bundles if
         // the exact bundle does not exist.
-        if (!existingFlowEmpty && bundleUpdateStrategy == BundleUpdateStrategy.USE_SPECIFIED_OR_COMPATIBLE_OR_GHOST) {
+        if (bundleUpdateStrategy == BundleUpdateStrategy.USE_SPECIFIED_OR_COMPATIBLE_OR_GHOST) {
             mapCompatibleBundles(proposedFlow, controller.getExtensionManager());
         }
 
         // serialize controller state to bytes
         checkFlowInheritability(existingDataFlow, proposedFlow, controller, bundleUpdateStrategy);
-
-        logger.debug("Checking missing component inheritability");
-        final FlowInheritabilityCheck missingComponentsCheck = new MissingComponentsCheck();
-        final FlowInheritability componentInheritability = missingComponentsCheck.checkInheritability(existingDataFlow, proposedFlow, controller);
-        if (!componentInheritability.isInheritable()) {
-            throw new UninheritableFlowException("Proposed Flow is not inheritable by the flow controller because of differences in missing components: " + componentInheritability.getExplanation());
-        }
 
         FlowComparison flowComparison = null;
         AffectedComponentSet affectedComponents = null;
@@ -204,7 +201,7 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
             logger.info("In order to inherit proposed dataflow, will stop any components that will be affected by the update");
             if (logger.isDebugEnabled()) {
                 logger.debug("Will stop the following components:");
-                logger.debug(activeSet.toString());
+                logger.debug("{}", activeSet);
                 final String differencesToString = flowDifferences.stream()
                         .map(FlowDifference::toString)
                         .collect(Collectors.joining("\n"));
@@ -256,6 +253,10 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
     private void mapCompatibleBundles(final DataFlow proposedFlow, final ExtensionManager extensionManager) {
         final Set<String> missingComponentIds = proposedFlow.getMissingComponents();
         final VersionedDataflow dataflow = proposedFlow.getVersionedDataflow();
+
+        if (isFlowEmpty(dataflow)) {
+            return;
+        }
 
         if (dataflow.getReportingTasks() == null) {
             dataflow.setReportingTasks(new ArrayList<>());
@@ -377,24 +378,6 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
         return null;
     }
 
-    private BundleCoordinate getCompatibleBundle(final BundleCoordinate coordinate, final ExtensionManager extensionManager, final String type) {
-        final org.apache.nifi.bundle.Bundle exactBundle = extensionManager.getBundle(coordinate);
-        if (exactBundle != null) {
-            return coordinate;
-        }
-
-        final BundleDTO bundleDto = new BundleDTO(coordinate.getGroup(), coordinate.getId(), coordinate.getVersion());
-        final Optional<BundleCoordinate> optionalCoordinate = BundleUtils.getOptionalCompatibleBundle(extensionManager, type, bundleDto);
-        if (optionalCoordinate.isPresent()) {
-            final BundleCoordinate selectedCoordinate = optionalCoordinate.get();
-            logger.debug("Found compatible bundle {} for {} and type {}", selectedCoordinate.getCoordinate(), coordinate, type);
-            return selectedCoordinate;
-        }
-
-        logger.debug("Could not find a compatible bundle for {} and type {}", coordinate, type);
-        return null;
-    }
-
     private void synchronizeFlow(final FlowController controller, final DataFlow existingFlow, final DataFlow proposedFlow, final AffectedComponentSet affectedComponentSet) {
         // attempt to sync controller with proposed flow
         try {
@@ -460,6 +443,7 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
                     .mapInstanceIdentifiers(true)
                     .mapControllerServiceReferencesToVersionedId(false)
                     .mapFlowRegistryClientId(true)
+                    .mapAssetReferences(true)
                     .build();
 
                 rootGroup.synchronizeFlow(versionedExternalFlow, syncOptions, flowMappingOptions);
@@ -469,6 +453,7 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
             inheritAuthorizations(existingFlow, proposedFlow, controller);
 
             removeMissingParameterContexts(controller, versionedFlow);
+            removeMissingRegistryClients(controller.getFlowManager(), versionedFlow);
         } catch (final Exception ex) {
             throw new FlowSynchronizationException(ex);
         }
@@ -553,9 +538,7 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
     private void inheritRegistryClients(final FlowController controller, final VersionedDataflow dataflow, final AffectedComponentSet affectedComponentSet) {
         final FlowManager flowManager = controller.getFlowManager();
 
-        final Set<String> versionedClientIds = new HashSet<>();
         for (final VersionedFlowRegistryClient versionedFlowRegistryClient : dataflow.getRegistries()) {
-            versionedClientIds.add(versionedFlowRegistryClient.getInstanceIdentifier());
             final FlowRegistryClientNode existing = flowManager.getFlowRegistryClient(versionedFlowRegistryClient.getIdentifier());
 
             if (existing == null) {
@@ -564,6 +547,14 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
                 updateRegistry(existing, versionedFlowRegistryClient, controller);
             }
         }
+    }
+
+    private void removeMissingRegistryClients(final FlowManager flowManager, final VersionedDataflow dataflow) {
+        final List<VersionedFlowRegistryClient> versionedRegistryClients = dataflow == null ? null : dataflow.getRegistries();
+        final Set<String> versionedClientIds = versionedRegistryClients == null ? Set.of() :
+            versionedRegistryClients.stream()
+                .map(VersionedFlowRegistryClient::getInstanceIdentifier)
+                .collect(Collectors.toSet());
 
         for (final FlowRegistryClientNode clientNode : flowManager.getAllFlowRegistryClients()) {
             if (!versionedClientIds.contains(clientNode.getIdentifier())) {
@@ -590,7 +581,7 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
         flowRegistryClient.setProperties(decryptedProperties, false, sensitiveDynamicPropertyNames);
     }
 
-    private void inheritReportingTasks(final FlowController controller, final VersionedDataflow dataflow, final AffectedComponentSet affectedComponentSet) throws ReportingTaskInstantiationException {
+    private void inheritReportingTasks(final FlowController controller, final VersionedDataflow dataflow, final AffectedComponentSet affectedComponentSet) {
         final Set<String> versionedTaskIds = new HashSet<>();
         for (final VersionedReportingTask versionedReportingTask : dataflow.getReportingTasks()) {
             versionedTaskIds.add(versionedReportingTask.getInstanceIdentifier());
@@ -609,7 +600,7 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
         }
     }
 
-    private void addReportingTask(final FlowController controller, final VersionedReportingTask reportingTask) throws ReportingTaskInstantiationException {
+    private void addReportingTask(final FlowController controller, final VersionedReportingTask reportingTask) {
         final BundleCoordinate coordinate = createBundleCoordinate(extensionManager, reportingTask.getBundle(), reportingTask.getType());
 
         final ReportingTaskNode taskNode = controller.createReportingTask(reportingTask.getType(), reportingTask.getInstanceIdentifier(), coordinate, false);
@@ -617,7 +608,11 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
 
         final ControllerServiceFactory serviceFactory = new StandardControllerServiceFactory(controller.getExtensionManager(), controller.getFlowManager(),
             controller.getControllerServiceProvider(), taskNode);
-        taskNode.migrateConfiguration(reportingTask.getProperties(), serviceFactory);
+        Map<String, String> rawPropertyValues = taskNode.getRawPropertyValues().entrySet().stream()
+                .collect(HashMap::new,
+                        (m, e) -> m.put(e.getKey().getName(), e.getValue()),
+                        HashMap::putAll);
+        taskNode.migrateConfiguration(rawPropertyValues, serviceFactory);
     }
 
     private void updateReportingTask(final ReportingTaskNode taskNode, final VersionedReportingTask reportingTask, final FlowController controller) {
@@ -793,7 +788,7 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
             parameterContexts.forEach(context -> namedParameterContexts.put(context.getName(), context));
 
             for (final VersionedParameterContext versionedParameterContext : parameterContexts) {
-                inheritParameterContext(versionedParameterContext, controller.getFlowManager(), namedParameterContexts, controller.getEncryptor());
+                inheritParameterContext(versionedParameterContext, controller.getFlowManager(), namedParameterContexts, controller.getEncryptor(), controller.getAssetManager());
             }
         });
     }
@@ -802,14 +797,15 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
             final VersionedParameterContext versionedParameterContext,
             final FlowManager flowManager,
             final Map<String, VersionedParameterContext> namedParameterContexts,
-            final PropertyEncryptor encryptor
+            final PropertyEncryptor encryptor,
+            final AssetManager assetManager
     ) {
         final ParameterContextManager contextManager = flowManager.getParameterContextManager();
         final ParameterContext existingContext = contextManager.getParameterContextNameMapping().get(versionedParameterContext.getName());
         if (existingContext == null) {
-            addParameterContext(versionedParameterContext, flowManager, namedParameterContexts, encryptor);
+            addParameterContext(versionedParameterContext, flowManager, namedParameterContexts, encryptor, assetManager);
         } else {
-            updateParameterContext(versionedParameterContext, existingContext, flowManager, namedParameterContexts, encryptor);
+            updateParameterContext(versionedParameterContext, existingContext, flowManager, namedParameterContexts, encryptor, assetManager);
         }
     }
 
@@ -817,9 +813,10 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
             final VersionedParameterContext versionedParameterContext,
             final FlowManager flowManager,
             final Map<String, VersionedParameterContext> namedParameterContexts,
-            final PropertyEncryptor encryptor
+            final PropertyEncryptor encryptor,
+            final AssetManager assetManager
     ) {
-        final Map<String, Parameter> parameters = createParameterMap(versionedParameterContext, encryptor);
+        final Map<String, Parameter> parameters = createParameterMap(flowManager, versionedParameterContext, encryptor, assetManager);
 
         final ParameterContextManager contextManager = flowManager.getParameterContextManager();
         final List<String> referenceIds = findReferencedParameterContextIds(versionedParameterContext, contextManager, namedParameterContexts);
@@ -864,31 +861,69 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
         return referenceIds;
     }
 
-    private Map<String, Parameter> createParameterMap(final VersionedParameterContext versionedParameterContext,
-                                                      final PropertyEncryptor encryptor) {
+    private Map<String, Parameter> createParameterMap(
+            final FlowManager flowManager,
+            final VersionedParameterContext versionedParameterContext,
+            final PropertyEncryptor encryptor,
+            final AssetManager assetManager
+    ) {
+        final Map<String, Parameter> providedParameters = getProvidedParameters(flowManager, versionedParameterContext);
+
         final Map<String, Parameter> parameters = new HashMap<>();
         for (final VersionedParameter versioned : versionedParameterContext.getParameters()) {
-            final ParameterDescriptor descriptor = new ParameterDescriptor.Builder()
-                    .description(versioned.getDescription())
-                    .name(versioned.getName())
-                    .sensitive(versioned.isSensitive())
-                    .build();
-
             final String parameterValue;
             final String rawValue = versioned.getValue();
             if (rawValue == null) {
                 parameterValue = null;
+            } else if (versioned.isProvided()) {
+                final String name = versioned.getName();
+                final Parameter providedParameter = providedParameters.get(name);
+                if (providedParameter == null) {
+                    logger.warn("Parameter Context [{}] Provided Parameter [{}] not found", versionedParameterContext.getIdentifier(), name);
+                    parameterValue = null;
+                } else {
+                    parameterValue = providedParameter.getValue();
+                }
             } else if (versioned.isSensitive()) {
                 parameterValue = decrypt(rawValue, encryptor);
             } else {
                 parameterValue = rawValue;
             }
 
-            final Parameter parameter = new Parameter(descriptor, parameterValue, null, versioned.isProvided());
+            final List<Asset> referencedAssets = getReferencedAssets(versioned, assetManager, versionedParameterContext.getInstanceIdentifier());
+            final Parameter parameter = new Parameter.Builder()
+                .parameterContextId(null)
+                .name(versioned.getName())
+                .description(versioned.getDescription())
+                .sensitive(versioned.isSensitive())
+                .value(referencedAssets.isEmpty() ? parameterValue : null)
+                .referencedAssets(referencedAssets)
+                .provided(versioned.isProvided())
+                .build();
+
             parameters.put(versioned.getName(), parameter);
         }
 
         return parameters;
+    }
+
+    private List<Asset> getReferencedAssets(final VersionedParameter versionedParameter, final AssetManager assetManager, final String contextId) {
+        final List<VersionedAsset> versionedAssets = versionedParameter.getReferencedAssets();
+        if (versionedAssets == null || versionedAssets.isEmpty()) {
+            return List.of();
+        }
+
+        final List<Asset> assets = new ArrayList<>();
+        for (final VersionedAsset versionedAsset : versionedAssets) {
+            final Optional<Asset> assetOption = assetManager.getAsset(versionedAsset.getIdentifier());
+            if (assetOption.isPresent()) {
+                assets.add(assetOption.get());
+            } else {
+                assets.add(assetManager.createMissingAsset(contextId, versionedAsset.getName()));
+            }
+        }
+
+        return assets;
     }
 
     private void updateParameterContext(
@@ -896,30 +931,32 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
             final ParameterContext parameterContext,
             final FlowManager flowManager,
             final Map<String, VersionedParameterContext> namedParameterContexts,
-            final PropertyEncryptor encryptor
+            final PropertyEncryptor encryptor,
+            final AssetManager assetManager
     ) {
-        final Map<String, Parameter> parameters = createParameterMap(versionedParameterContext, encryptor);
+        final Map<String, Parameter> parameters = createParameterMap(flowManager, versionedParameterContext, encryptor, assetManager);
 
         final Map<String, String> currentValues = new HashMap<>();
-        parameterContext.getParameters().values().forEach(param -> currentValues.put(param.getDescriptor().getName(), param.getValue()));
-
-        if (logger.isDebugEnabled()) {
-            final Map<String, String> proposedValues = parameters.entrySet().stream()
-                    .collect(Collectors.toMap(Entry::getKey, entry -> entry.getValue().getValue()));
-            logger.debug("For Parameter Context {}, current parameters = {}, proposed = {}", parameterContext.getName(), currentValues, proposedValues);
-        }
+        final Map<String, Set<String>> currentAssetReferences = new HashMap<>();
+        parameterContext.getParameters().values().forEach(param -> {
+            currentValues.put(param.getDescriptor().getName(), param.getValue());
+            currentAssetReferences.put(param.getDescriptor().getName(), getAssetIds(param));
+        });
 
         final Map<String, Parameter> updatedParameters = new HashMap<>();
         final Set<String> proposedParameterNames = new HashSet<>();
         for (final VersionedParameter parameter : versionedParameterContext.getParameters()) {
             final String parameterName = parameter.getName();
             final String currentValue = currentValues.get(parameterName);
+            final Set<String> currentAssetIds = currentAssetReferences.getOrDefault(parameterName, Collections.emptySet());
 
-            proposedParameterNames.add(parameterName);
-            if (!Objects.equals(currentValue, parameter.getValue())) {
-                final Parameter updatedParameterObject = parameters.get(parameterName);
+            final Parameter updatedParameterObject = parameters.get(parameterName);
+            final String updatedValue = updatedParameterObject.getValue();
+            final Set<String> updatedAssetIds = getAssetIds(updatedParameterObject);
+            if (!Objects.equals(currentValue, updatedValue) || !currentAssetIds.equals(updatedAssetIds)) {
                 updatedParameters.put(parameterName, updatedParameterObject);
             }
+            proposedParameterNames.add(parameterName);
         }
 
         // If any parameters are removed, need to add a null value to the map in order to make sure that the parameter is removed.
@@ -943,6 +980,13 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
                 .map(contextManager::getParameterContext)
                 .collect(Collectors.toList());
         parameterContext.setInheritedParameterContexts(referencedContexts);
+    }
+
+    private Set<String> getAssetIds(final Parameter parameter) {
+        return Stream.ofNullable(parameter.getReferencedAssets())
+                .flatMap(Collection::stream)
+                .map(Asset::getIdentifier)
+                .collect(Collectors.toSet());
     }
 
     private void inheritControllerServices(final FlowController controller, final VersionedDataflow dataflow, final AffectedComponentSet affectedComponentSet) {
@@ -996,6 +1040,11 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
         // Enable any Controller-level services that are intended to be enabled.
         if (!toEnable.isEmpty()) {
             controller.getControllerServiceProvider().enableControllerServices(toEnable);
+
+            // Validate Controller-level services
+            for (final ControllerServiceNode serviceNode : toEnable) {
+                serviceNode.performValidation();
+            }
         }
 
         // Disable any Controller-level services that are intended to be disabled.
@@ -1004,6 +1053,75 @@ public class VersionedFlowSynchronizer implements FlowSynchronizer {
         }
 
         removeMissingServices(controller, dataflow);
+    }
+
+    private Map<String, Parameter> getProvidedParameters(final FlowManager flowManager, final VersionedParameterContext versionedParameterContext) {
+        final Map<String, Parameter> providedParameters;
+        final String parameterProviderId = versionedParameterContext.getParameterProvider();
+        if (parameterProviderId == null) {
+            providedParameters = Collections.emptyMap();
+        } else {
+            final ParameterProviderNode parameterProviderNode = flowManager.getParameterProvider(parameterProviderId);
+            final ValidationStatus validationStatus = getParameterProviderValidationStatus(parameterProviderNode);
+
+            final String parameterGroupName = versionedParameterContext.getParameterGroupName();
+            if (ValidationStatus.VALID == validationStatus) {
+                providedParameters = getProvidedParameters(parameterProviderNode, parameterGroupName);
+            } else {
+                logger.warn("Parameter Provider [{}] {}: Parameters not available for Group [{}]", parameterProviderId, validationStatus, parameterGroupName);
+                providedParameters = Collections.emptyMap();
+            }
+        }
+        return providedParameters;
+    }
+
+    private Map<String, Parameter> getProvidedParameters(final ParameterProviderNode parameterProviderNode, final String parameterGroupName) {
+        final String providerId = parameterProviderNode.getIdentifier();
+        logger.debug("Fetching Parameters for Group [{}] from Provider [{}]", parameterGroupName, providerId);
+
+        try {
+            parameterProviderNode.fetchParameters();
+        } catch (final Exception e) {
+            logger.warn("Fetching Parameters for Group [{}] from Provider [{}] failed", parameterGroupName, providerId, e);
+        }
+
+        final Map<String, Parameter> parameters;
+        final Optional<ParameterGroup> foundParameterGroup = parameterProviderNode.findFetchedParameterGroup(parameterGroupName);
+        if (foundParameterGroup.isPresent()) {
+            final ParameterGroup parameterGroup = foundParameterGroup.get();
+            parameters = parameterGroup.getParameters().stream()
+                    .collect(
+                            Collectors.toMap(parameter -> parameter.getDescriptor().getName(), Function.identity())
+                    );
+        } else {
+            parameters = Collections.emptyMap();
+        }
+
+        logger.info("Fetched Parameters [{}] for Group [{}] from Provider [{}]", parameters.size(), parameterGroupName, providerId);
+        return parameters;
+    }
+
+    private ValidationStatus getParameterProviderValidationStatus(final ParameterProviderNode parameterProviderNode) {
+        final ValidationStatus workingValidationStatus;
+
+        final ValidationStatus currentValidationStatus = parameterProviderNode.getValidationStatus();
+        if (ValidationStatus.VALIDATING == currentValidationStatus) {
+            // Perform validation to determine status before fetching Parameters
+            workingValidationStatus = parameterProviderNode.performValidation();
+        } else {
+            workingValidationStatus = currentValidationStatus;
+        }
+
+        final ValidationStatus validationStatus;
+        if (ValidationStatus.INVALID == workingValidationStatus) {
+            // Wait for Validation as needed for Parameter Providers with Controller Services or other dependencies
+            parameterProviderNode.resetValidationState();
+            validationStatus = parameterProviderNode.getValidationStatus(10, TimeUnit.SECONDS);
+        } else {
+            validationStatus = workingValidationStatus;
+        }
+
+        return validationStatus;
     }
 
     private void removeMissingServices(final FlowController controller, final VersionedDataflow dataflow) {

@@ -187,6 +187,13 @@ public class CompressContent extends AbstractProcessor {
         .defaultValue("false")
         .build();
 
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(
+            MODE,
+            COMPRESSION_FORMAT,
+            COMPRESSION_LEVEL,
+            UPDATE_FILENAME
+    );
+
     public static final Relationship REL_SUCCESS = new Relationship.Builder()
         .name("success")
         .description("FlowFiles will be transferred to the success relationship after successfully being compressed or decompressed")
@@ -196,13 +203,10 @@ public class CompressContent extends AbstractProcessor {
         .description("FlowFiles will be transferred to the failure relationship if they fail to compress/decompress")
         .build();
 
-    private final List<PropertyDescriptor> properties = List.of(MODE,
-        COMPRESSION_FORMAT,
-        COMPRESSION_LEVEL,
-        UPDATE_FILENAME);
-
-    private final Set<Relationship> relationships = Set.of(REL_SUCCESS,
-        REL_FAILURE);
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(
+            REL_SUCCESS,
+            REL_FAILURE
+    );
 
     private final Map<String, String> compressionFormatMimeTypeMap = Map.ofEntries(
         Map.entry("application/gzip", COMPRESSION_FORMAT_GZIP),
@@ -222,12 +226,12 @@ public class CompressContent extends AbstractProcessor {
 
     @Override
     public Set<Relationship> getRelationships() {
-        return relationships;
+        return RELATIONSHIPS;
     }
 
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        return properties;
+        return PROPERTIES;
     }
 
     @Override
@@ -263,15 +267,14 @@ public class CompressContent extends AbstractProcessor {
         if (compressionFormatValue.equals(COMPRESSION_FORMAT_ATTRIBUTE)) {
             final String mimeType = flowFile.getAttribute(CoreAttributes.MIME_TYPE.key());
             if (mimeType == null) {
-                logger.error("No {} attribute exists for {}; routing to failure", new Object[]{CoreAttributes.MIME_TYPE.key(), flowFile});
+                logger.error("No {} attribute exists for {}; routing to failure", CoreAttributes.MIME_TYPE.key(), flowFile);
                 session.transfer(flowFile, REL_FAILURE);
                 return;
             }
 
             compressionFormatValue = compressionFormatMimeTypeMap.get(mimeType);
             if (compressionFormatValue == null) {
-                logger.info("Mime Type of {} is '{}', which does not indicate a supported Compression Format; routing to success without decompressing",
-                    new Object[]{flowFile, mimeType});
+                logger.info("Mime Type of {} is '{}', which does not indicate a supported Compression Format; routing to success without decompressing", flowFile, mimeType);
                 session.transfer(flowFile, REL_SUCCESS);
                 return;
             }
@@ -440,7 +443,7 @@ public class CompressContent extends AbstractProcessor {
         if (closeable != null) {
             try {
                 closeable.close();
-            } catch (final Exception e) {
+            } catch (final Exception ignored) {
             }
         }
     }

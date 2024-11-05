@@ -28,6 +28,8 @@ import org.apache.nifi.registry.flow.RegisterAction;
 import org.apache.nifi.registry.flow.RegisteredFlow;
 import org.apache.nifi.registry.flow.RegisteredFlowSnapshot;
 import org.apache.nifi.registry.flow.RegisteredFlowSnapshotMetadata;
+import org.apache.nifi.registry.flow.git.client.GitCreateContentRequest;
+import org.apache.nifi.registry.flow.git.serialize.FlowSnapshotSerializer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -50,6 +52,7 @@ public class GitHubFlowRegistryClientTest {
 
     static final String DEFAULT_REPO_PATH = "some-path";
     static final String DEFAULT_REPO_BRANCH = "some-branch";
+    static final String DEFAULT_FILTER = "[.].*";
 
     private GitHubRepositoryClient repositoryClient;
     private FlowSnapshotSerializer flowSnapshotSerializer;
@@ -70,9 +73,16 @@ public class GitHubFlowRegistryClientTest {
         when(initializationContext.getLogger()).thenReturn(componentLog);
         flowRegistryClient.initialize(initializationContext);
 
-        when(repositoryClient.getCanRead()).thenReturn(true);
-        when(repositoryClient.getCanWrite()).thenReturn(true);
-        when(repositoryClient.getTopLevelDirectoryNames(anyString())).thenReturn(Set.of("existing-bucket"));
+        when(repositoryClient.hasReadPermission()).thenReturn(true);
+        when(repositoryClient.hasWritePermission()).thenReturn(true);
+        when(repositoryClient.getTopLevelDirectoryNames(anyString())).thenReturn(Set.of("existing-bucket", ".github"));
+    }
+
+    @Test
+    public void testDirExclusion() throws IOException, FlowRegistryException {
+        setupClientConfigurationContextWithDefaults();
+        final Set<FlowRegistryBucket> buckets = flowRegistryClient.getBuckets(clientConfigurationContext, DEFAULT_REPO_BRANCH);
+        assertEquals(buckets.stream().filter(b -> b.getName().equals(".github")).count(), 0);
     }
 
     @Test
@@ -90,12 +100,12 @@ public class GitHubFlowRegistryClientTest {
         assertEquals(incomingFlow.getBucketName(), resultFlow.getBucketName());
         assertEquals(incomingFlow.getBranch(), resultFlow.getBranch());
 
-        final ArgumentCaptor<GitHubCreateContentRequest> argumentCaptor = ArgumentCaptor.forClass(GitHubCreateContentRequest.class);
+        final ArgumentCaptor<GitCreateContentRequest> argumentCaptor = ArgumentCaptor.forClass(GitCreateContentRequest.class);
         verify(repositoryClient).createContent(argumentCaptor.capture());
 
-        final GitHubCreateContentRequest capturedArgument = argumentCaptor.getValue();
+        final GitCreateContentRequest capturedArgument = argumentCaptor.getValue();
         assertEquals(incomingFlow.getBranch(), capturedArgument.getBranch());
-        assertEquals(GitHubFlowRegistryClient.SNAPSHOT_FILE_PATH_FORMAT.formatted(incomingFlow.getBucketIdentifier(), incomingFlow.getIdentifier()), capturedArgument.getPath());
+        assertEquals("%s/%s.json".formatted(incomingFlow.getBucketIdentifier(), incomingFlow.getIdentifier()), capturedArgument.getPath());
         assertEquals(serializedSnapshotContent, capturedArgument.getContent());
         assertNull(capturedArgument.getExistingContentSha());
     }
@@ -117,7 +127,7 @@ public class GitHubFlowRegistryClientTest {
         incomingSnapshot.setSnapshotMetadata(incomingMetadata);
         incomingSnapshot.setFlowContents(new VersionedProcessGroup());
 
-        final String snapshotFilePath = GitHubFlowRegistryClient.SNAPSHOT_FILE_PATH_FORMAT.formatted(incomingFlow.getBucketIdentifier(), incomingFlow.getIdentifier());
+        final String snapshotFilePath = "%s/%s.json".formatted(incomingFlow.getBucketIdentifier(), incomingFlow.getIdentifier());
         when(repositoryClient.getContentFromBranch(snapshotFilePath, DEFAULT_REPO_BRANCH)).thenReturn(new ByteArrayInputStream(new byte[0]));
         when(flowSnapshotSerializer.deserialize(any(InputStream.class))).thenReturn(incomingSnapshot);
 
@@ -125,7 +135,7 @@ public class GitHubFlowRegistryClientTest {
         when(flowSnapshotSerializer.serialize(any(RegisteredFlowSnapshot.class))).thenReturn(serializedSnapshotContent);
 
         final String commitSha = "commitSha";
-        when(repositoryClient.createContent(any(GitHubCreateContentRequest.class))).thenReturn(commitSha);
+        when(repositoryClient.createContent(any(GitCreateContentRequest.class))).thenReturn(commitSha);
 
         final RegisteredFlowSnapshot resultSnapshot = flowRegistryClient.registerFlowSnapshot(clientConfigurationContext, incomingSnapshot, RegisterAction.COMMIT);
         assertNotNull(resultSnapshot);
@@ -167,6 +177,9 @@ public class GitHubFlowRegistryClientTest {
 
         final PropertyValue branchPropertyValue = createMockPropertyValue(branch);
         when(clientConfigurationContext.getProperty(GitHubFlowRegistryClient.REPOSITORY_BRANCH)).thenReturn(branchPropertyValue);
+
+        final PropertyValue filterPropertyValue = createMockPropertyValue(DEFAULT_FILTER);
+        when(clientConfigurationContext.getProperty(GitHubFlowRegistryClient.DIRECTORY_FILTER_EXCLUDE)).thenReturn(filterPropertyValue);
     }
 
     private void setupClientConfigurationContextWithDefaults() {
@@ -194,7 +207,7 @@ public class GitHubFlowRegistryClientTest {
         }
 
         @Override
-        protected FlowSnapshotSerializer createFlowSnapshotSerializer(final FlowRegistryClientInitializationContext initializationContext) {
+        protected FlowSnapshotSerializer createFlowSnapshotSerializer() {
             return flowSnapshotSerializer;
         }
     }

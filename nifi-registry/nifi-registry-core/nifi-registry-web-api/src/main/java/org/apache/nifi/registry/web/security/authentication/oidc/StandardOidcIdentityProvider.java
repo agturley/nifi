@@ -255,7 +255,7 @@ public class StandardOidcIdentityProvider implements OidcIdentityProvider {
             throw new IOException("Unable to download OpenId Connect Provider metadata from " + url + ": Status code " + httpResponse.getStatusCode());
         }
 
-        final JSONObject jsonObject = httpResponse.getContentAsJSONObject();
+        final JSONObject jsonObject = httpResponse.getBodyAsJSONObject();
         return OIDCProviderMetadata.parse(jsonObject);
     }
 
@@ -405,8 +405,7 @@ public class StandardOidcIdentityProvider implements OidcIdentityProvider {
         if (StringUtils.isBlank(identity)) {
             // Provide clear message to admin that desired claim is missing and present available claims
             List<String> availableClaims = getAvailableClaims(oidcJwt.getJWTClaimsSet());
-            logger.warn("Failed to obtain the identity of the user with the claim '{}'. The available claims on " +
-                            "the OIDC response are: {}. Will attempt to obtain the identity from secondary sources",
+            logger.warn("Failed to obtain the identity of the user with the claim '{}'. The available claims on the OIDC response are: {}. Will attempt to obtain the identity from secondary sources",
                     identityClaim, availableClaims);
 
             // If the desired user claim was not "email" and "email" is present, use that

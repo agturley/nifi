@@ -30,12 +30,10 @@ import org.apache.nifi.processors.opentelemetry.protocol.TelemetryAttributeName;
 import org.apache.nifi.processors.opentelemetry.protocol.TelemetryContentType;
 import org.apache.nifi.processors.opentelemetry.protocol.TelemetryRequestType;
 import org.apache.nifi.reporting.InitializationException;
+import org.apache.nifi.security.cert.builder.StandardCertificateBuilder;
+import org.apache.nifi.security.ssl.StandardSslContextBuilder;
+import org.apache.nifi.security.ssl.StandardTrustManagerBuilder;
 import org.apache.nifi.security.util.ClientAuth;
-import org.apache.nifi.security.util.KeyStoreUtils;
-import org.apache.nifi.security.util.SslContextFactory;
-import org.apache.nifi.security.util.TemporaryKeyStoreBuilder;
-import org.apache.nifi.security.util.TlsConfiguration;
-import org.apache.nifi.security.util.TlsException;
 import org.apache.nifi.security.util.TlsPlatform;
 import org.apache.nifi.ssl.SSLContextService;
 import org.apache.nifi.util.MockFlowFile;
@@ -45,8 +43,9 @@ import org.apache.nifi.web.client.StandardWebClientService;
 import org.apache.nifi.web.client.api.HttpEntityHeaders;
 import org.apache.nifi.web.client.api.HttpResponseEntity;
 import org.apache.nifi.web.client.api.HttpResponseStatus;
-import org.apache.nifi.web.client.api.WebClientService;
 import org.apache.nifi.web.client.ssl.TlsContext;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -61,6 +60,7 @@ import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.X509KeyManager;
 import javax.net.ssl.X509TrustManager;
+import javax.security.auth.x500.X500Principal;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -70,11 +70,18 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.KeyStore;
+import java.security.cert.Certificate;
+import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.UUID;
 import java.util.zip.GZIPOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -86,6 +93,12 @@ import static org.mockito.Mockito.when;
 @Timeout(15)
 @ExtendWith(MockitoExtension.class)
 class ListenOTLPTest {
+
+    private static final String KEY_ALGORITHM = "RSA";
+
+    private static final String KEY_ALIAS = "localhost";
+
+    private static final X500Principal CERTIFICATE_ISSUER = new X500Principal("CN=localhost");
 
     private static final String LOCALHOST = "127.0.0.1";
 
@@ -113,7 +126,7 @@ class ListenOTLPTest {
 
     private static final byte[] EMPTY_BYTES = new byte[]{};
 
-    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
 
     private static final Duration READ_TIMEOUT = Duration.ofSeconds(5);
 
@@ -123,40 +136,51 @@ class ListenOTLPTest {
 
     private static X509KeyManager keyManager;
 
+    private static StandardWebClientService webClientService;
+
     @Mock
     private SSLContextService sslContextService;
-
-    private WebClientService webClientService;
 
     private TestRunner runner;
 
     private ListenOTLP processor;
 
     @BeforeAll
-    static void setSslContext() throws TlsException {
-        final TlsConfiguration tlsConfiguration = new TemporaryKeyStoreBuilder().build();
-        trustManager = SslContextFactory.getX509TrustManager(tlsConfiguration);
+    static void setSslContext() throws GeneralSecurityException, IOException {
+        final KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance(KEY_ALGORITHM);
+        final KeyPair keyPair = keyPairGenerator.generateKeyPair();
+        final X509Certificate certificate = new StandardCertificateBuilder(keyPair, CERTIFICATE_ISSUER, Duration.ofDays(1)).build();
 
-        final KeyManagerFactory keyManagerFactory = KeyStoreUtils.loadKeyManagerFactory(tlsConfiguration);
+        final KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        trustStore.load(null);
+
+        trustStore.setCertificateEntry(KEY_ALIAS, certificate);
+        trustManager = new StandardTrustManagerBuilder().trustStore(trustStore).build();
+
+        final char[] generated = UUID.randomUUID().toString().toCharArray();
+        final KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        keyStore.load(null);
+        keyStore.setKeyEntry(KEY_ALIAS, keyPair.getPrivate(), generated, new Certificate[]{certificate});
+
+        final KeyManagerFactory keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        keyManagerFactory.init(keyStore, generated);
         final KeyManager[] keyManagers = keyManagerFactory.getKeyManagers();
         final Optional<KeyManager> firstKeyManager = Arrays.stream(keyManagers).findFirst();
         final KeyManager configuredKeyManager = firstKeyManager.orElse(null);
         keyManager = configuredKeyManager instanceof X509KeyManager ? (X509KeyManager) configuredKeyManager : null;
 
-        sslContext = SslContextFactory.createSslContext(tlsConfiguration);
-    }
+        sslContext = new StandardSslContextBuilder()
+                .keyStore(keyStore)
+                .keyPassword(generated)
+                .trustStore(trustStore)
+                .build();
 
-    @BeforeEach
-    void setRunner() {
-        processor = new ListenOTLP();
-        runner = TestRunners.newTestRunner(processor);
+        webClientService = new StandardWebClientService();
+        webClientService.setReadTimeout(READ_TIMEOUT);
+        webClientService.setConnectTimeout(CONNECT_TIMEOUT);
+        webClientService.setWriteTimeout(READ_TIMEOUT);
 
-        final StandardWebClientService standardWebClientService = new StandardWebClientService();
-        standardWebClientService.setReadTimeout(READ_TIMEOUT);
-        standardWebClientService.setConnectTimeout(CONNECT_TIMEOUT);
-        standardWebClientService.setWriteTimeout(READ_TIMEOUT);
-
-        standardWebClientService.setTlsContext(new TlsContext() {
+        webClientService.setTlsContext(new TlsContext() {
             @Override
             public String getProtocol() {
                 return TlsPlatform.getLatestProtocol();
@@ -172,8 +196,22 @@ class ListenOTLPTest {
                 return Optional.ofNullable(keyManager);
             }
         });
+    }
 
-        webClientService = standardWebClientService;
+    @AfterAll
+    static void closeWebClientService() {
+        webClientService.close();
+    }
+
+    @BeforeEach
+    void setRunner() {
+        processor = new ListenOTLP();
+        runner = TestRunners.newTestRunner(processor);
+    }
+
+    @AfterEach
+    void stopRunner() {
+        runner.stop();
     }
 
     @Test

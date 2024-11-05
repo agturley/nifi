@@ -1439,7 +1439,7 @@ The following binary components are provided under the Apache Software License v
   (ASLv2) ParCEFone
     The following NOTICE information applies:
       ParCEFone
-      Copyright 2016 Fluenda
+      Copyright 2016-2024 Fluenda
 
   (ASLv2) Grok
     The following NOTICE information applies:
@@ -2560,6 +2560,7 @@ The following binary components are provided to the 'Public Domain'.  See projec
 
     (Public Domain) XZ for Java (org.tukaani:xz:jar:1.5 - http://tukaani.org/xz/java.html
     (Public Domain) AOP Alliance 1.0 (http://aopalliance.sourceforge.net/)
+    (Public Domain) JSON (org.json:json:jar:20240303)
 
 The following binary components are provided under the Creative Commons Zero license version 1.0.  See project link for details.
 
@@ -2573,5 +2574,11 @@ SIL OFL 1.1
 The following binary components are provided under the SIL Open Font License 1.1
   (SIL OFL 1.1) FontAwesome (4.7.0 - https://fontawesome.com/license/free)
 
-For the binary distribution of nifi-web-frontend see its 3rdpartylicenses.txt
+For the binary distribution of nifi-ui see its 3rdpartylicenses.txt
+for additional license and notice information.
+
+For the binary distribution of nifi-jolt-transform-json-ui see its 3rdpartylicenses.txt
+for additional license and notice information.
+
+For the binary distribution of nifi-standard-content-viewer see its 3rdpartylicenses.txt
 for additional license and notice information.

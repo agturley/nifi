@@ -17,10 +17,10 @@
 package org.apache.nifi.manifest;
 
 import org.apache.nifi.bundle.Bundle;
+import org.apache.nifi.bundle.BundleCoordinate;
 import org.apache.nifi.bundle.BundleDetails;
 import org.apache.nifi.c2.protocol.component.api.BuildInfo;
 import org.apache.nifi.c2.protocol.component.api.RuntimeManifest;
-import org.apache.nifi.components.PropertyDescriptor;
 import org.apache.nifi.extension.manifest.AllowableValue;
 import org.apache.nifi.extension.manifest.ControllerServiceDefinition;
 import org.apache.nifi.extension.manifest.ExpressionLanguageScope;
@@ -47,6 +47,7 @@ import org.apache.nifi.runtime.manifest.ExtensionManifestContainer;
 import org.apache.nifi.runtime.manifest.RuntimeManifestBuilder;
 import org.apache.nifi.runtime.manifest.impl.SchedulingDefaultsFactory;
 import org.apache.nifi.runtime.manifest.impl.StandardRuntimeManifestBuilder;
+import org.apache.nifi.web.ResourceNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -93,7 +94,37 @@ public class StandardRuntimeManifestService implements RuntimeManifestService {
     @Override
     public RuntimeManifest getManifest() {
         final Set<Bundle> allBundles = extensionManager.getAllBundles();
+        final RuntimeManifestBuilder manifestBuilder = createRuntimeManifestBuilder();
 
+        for (final Bundle bundle : allBundles) {
+            getExtensionManifest(bundle).ifPresent(manifestBuilder::addBundle);
+        }
+
+        getPythonExtensionManifests().forEach(manifestBuilder::addBundle);
+
+        return manifestBuilder.build();
+    }
+
+    @Override
+    public RuntimeManifest getManifestForBundle(String group, String artifact, String version) {
+        final Set<Bundle> allBundles = extensionManager.getAllBundles();
+        final RuntimeManifestBuilder manifestBuilder = createRuntimeManifestBuilder();
+
+        if (PythonBundle.isPythonCoordinate(group, artifact)) {
+            getPythonExtensionManifests().forEach(manifestBuilder::addBundle);
+        } else {
+            final Optional<Bundle> desiredBundle = allBundles.stream()
+                    .filter(bundle -> group.equals(bundle.getBundleDetails().getCoordinate().getGroup())
+                            && artifact.equals(bundle.getBundleDetails().getCoordinate().getId())
+                            && version.equals(bundle.getBundleDetails().getCoordinate().getVersion())).findFirst();
+
+            desiredBundle.ifPresent(bundle -> getExtensionManifest(bundle).ifPresent(manifestBuilder::addBundle));
+        }
+
+        return manifestBuilder.build();
+    }
+
+    private RuntimeManifestBuilder createRuntimeManifestBuilder() {
         final Bundle frameworkBundle = getFrameworkBundle();
         final BundleDetails frameworkDetails = frameworkBundle.getBundleDetails();
         final Date frameworkBuildDate = frameworkDetails.getBuildTimestampDate();
@@ -111,13 +142,7 @@ public class StandardRuntimeManifestService implements RuntimeManifestService {
                 .schedulingDefaults(SchedulingDefaultsFactory.getNifiSchedulingDefaults())
                 .buildInfo(buildInfo);
 
-        for (final Bundle bundle : allBundles) {
-            getExtensionManifest(bundle).ifPresent(manifestBuilder::addBundle);
-        }
-
-        getPythonExtensionManifests().forEach(manifestBuilder::addBundle);
-
-        return manifestBuilder.build();
+        return manifestBuilder;
     }
 
     private List<ExtensionManifestContainer> getPythonExtensionManifests() {
@@ -212,8 +237,8 @@ public class StandardRuntimeManifestService implements RuntimeManifestService {
         property.setRequired(propertyDescription.isRequired());
         property.setSensitive(propertyDescription.isSensitive());
 
-        // TODO: Handle Allowable Values
         property.setControllerServiceDefinition(getManifestControllerServiceDefinition(propertyDescription.getControllerServiceDefinition()));
+        property.setAllowableValues(getAllowableValues(propertyDescription));
 
         return property;
     }
@@ -228,22 +253,17 @@ public class StandardRuntimeManifestService implements RuntimeManifestService {
         return definition;
     }
 
-    private static List<AllowableValue> getManifestAllowableValues(final PropertyDescriptor propertyDescriptor) {
-        if (propertyDescriptor.getAllowableValues() == null) {
-            return List.of();
-        }
-
-        final List<AllowableValue> allowableValues = new ArrayList<>();
-        for (final org.apache.nifi.components.AllowableValue allowableValue : propertyDescriptor.getAllowableValues()) {
-            final AllowableValue manifestAllowableValue = new AllowableValue();
-            manifestAllowableValue.setDescription(allowableValue.getDescription());
-            manifestAllowableValue.setValue(allowableValue.getValue());
-            manifestAllowableValue.setDisplayName(allowableValue.getDisplayName());
-            allowableValues.add(manifestAllowableValue);
-        }
-        return allowableValues;
+    private static List<AllowableValue> getAllowableValues(final PropertyDescription propertyDescription) {
+        return Optional.ofNullable(propertyDescription.getAllowableValues()).orElse(List.of())
+            .stream()
+            .map(value -> {
+                AllowableValue allowableValue = new AllowableValue();
+                allowableValue.setValue(value);
+                allowableValue.setDisplayName(value);
+                return allowableValue;
+            })
+            .toList();
     }
-
 
     private static List<UseCase> getUseCases(final PythonProcessorDetails pythonProcessorDetails) {
         final List<UseCase> useCases = new ArrayList<>();
@@ -320,8 +340,20 @@ public class StandardRuntimeManifestService implements RuntimeManifestService {
         }
     }
 
-    private Map<String, String> loadAdditionalDetails(final BundleDetails bundleDetails) {
-        final Map<String, String> additionalDetailsMap = new LinkedHashMap<>();
+    @Override
+    public Map<String, File> discoverAdditionalDetails(String group, String artifact, String version) {
+        final BundleCoordinate bundleCoordinate = new BundleCoordinate(group, artifact, version);
+        final Bundle bundle = extensionManager.getBundle(bundleCoordinate);
+
+        if (bundle == null) {
+            throw new ResourceNotFoundException("Unable to find bundle [" + bundleCoordinate + "]");
+        }
+
+        return discoverAdditionalDetails(bundle.getBundleDetails());
+    }
+
+    private Map<String, File> discoverAdditionalDetails(final BundleDetails bundleDetails) {
+        final Map<String, File> additionalDetailsMap = new LinkedHashMap<>();
 
         final File additionalDetailsDir = new File(bundleDetails.getWorkingDirectory(), "META-INF/docs/additional-details");
         if (!additionalDetailsDir.exists()) {
@@ -335,24 +367,34 @@ public class StandardRuntimeManifestService implements RuntimeManifestService {
                 continue;
             }
 
-            final File additionalDetailsFile = new File(additionalDetailsTypeDir, "additionalDetails.html");
+            final File additionalDetailsFile = new File(additionalDetailsTypeDir, "additionalDetails.md");
             if (!additionalDetailsFile.exists()) {
-                LOGGER.debug("No additionalDetails.html found under [{}]", additionalDetailsTypeDir.getAbsolutePath());
+                LOGGER.debug("No additionalDetails.md found under [{}]", additionalDetailsTypeDir.getAbsolutePath());
                 continue;
             }
 
+            additionalDetailsMap.put(additionalDetailsTypeDir.getName(), additionalDetailsFile);
+        }
+
+        return additionalDetailsMap;
+    }
+
+    private Map<String, String> loadAdditionalDetails(final BundleDetails bundleDetails) {
+        final Map<String, File> additionalDetailsMap = discoverAdditionalDetails(bundleDetails);
+
+        return additionalDetailsMap.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey, entry -> {
+            final File additionalDetailsFile = entry.getValue();
+
             try (final Stream<String> additionalDetailsLines = Files.lines(additionalDetailsFile.toPath())) {
-                final String typeName = additionalDetailsTypeDir.getName();
+                final String typeName = additionalDetailsFile.getParentFile().getName();
                 final String additionalDetailsContent = additionalDetailsLines.collect(Collectors.joining());
                 LOGGER.debug("Added additionalDetails for {} from {}", typeName, additionalDetailsFile.getAbsolutePath());
-                additionalDetailsMap.put(typeName, additionalDetailsContent);
+                return additionalDetailsContent;
             } catch (final IOException e) {
                 throw new RuntimeException("Unable to load additional details content for "
                         + additionalDetailsFile.getAbsolutePath() + " due to: " + e.getMessage(), e);
             }
-        }
-
-        return additionalDetailsMap;
+        }));
     }
 
     // Visible for overriding from tests

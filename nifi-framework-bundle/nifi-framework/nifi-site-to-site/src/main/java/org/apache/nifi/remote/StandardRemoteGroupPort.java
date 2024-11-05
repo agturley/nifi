@@ -280,10 +280,7 @@ public class StandardRemoteGroupPort extends RemoteGroupPort {
             if (t instanceof TransmissionDisabledException) {
                 logger.debug(message, t);
             } else {
-                logger.error("{} failed to communicate with remote NiFi instance due to {}", this, t.toString());
-                if (logger.isDebugEnabled()) {
-                    logger.error("", t);
-                }
+                logger.error("{} failed to communicate with remote NiFi instance", this, t);
 
                 remoteGroup.getEventReporter().reportEvent(Severity.ERROR, CATEGORY, message);
             }
@@ -443,8 +440,8 @@ public class StandardRemoteGroupPort extends RemoteGroupPort {
                 final String uploadDataRate = stopWatch.calculateDataRate(numBytesReceived);
                 final long uploadMillis = stopWatch.getDuration(TimeUnit.MILLISECONDS);
                 final String dataSize = FormatUtils.formatDataSize(numBytesReceived);
-                logger.info("{} Successfully received {} ({}) from {} in {} milliseconds at a rate of {}", new Object[]{
-                    this, flowFileDescription, dataSize, transaction.getCommunicant().getUrl(), uploadMillis, uploadDataRate});
+                logger.info("{} Successfully received {} ({}) from {} in {} milliseconds at a rate of {}",
+                        this, flowFileDescription, dataSize, transaction.getCommunicant().getUrl(), uploadMillis, uploadDataRate);
             }
         });
 

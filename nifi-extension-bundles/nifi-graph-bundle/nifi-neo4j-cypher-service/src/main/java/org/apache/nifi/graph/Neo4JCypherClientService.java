@@ -235,11 +235,10 @@ public class Neo4JCypherClientService extends AbstractControllerService implemen
         try {
             neo4JDriver = getDriver(context);
         } catch (Exception e) {
-            getLogger().error("Error while getting connection " + e.getLocalizedMessage(), e);
+            getLogger().error("Error while getting connection", e);
             throw new ProcessException("Error while getting connection" + e.getLocalizedMessage(), e);
         }
-        getLogger().info("Neo4JCypherExecutor connection created for url {}",
-                new Object[] {connectionUrl});
+        getLogger().info("Neo4JCypherExecutor connection created for url {}", connectionUrl);
     }
 
     @OnDisabled

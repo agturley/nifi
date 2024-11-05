@@ -19,11 +19,14 @@ package org.apache.nifi.minifi;
 
 import static java.util.Optional.ofNullable;
 import static org.apache.commons.lang3.StringUtils.EMPTY;
+import static org.apache.nifi.minifi.validator.FlowValidator.validate;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.List;
 import java.util.Optional;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.nifi.components.ValidationResult;
 import org.apache.nifi.headless.HeadlessNiFiServer;
 import org.apache.nifi.minifi.bootstrap.BootstrapListener;
 import org.apache.nifi.minifi.c2.C2NifiClientService;
@@ -35,27 +38,14 @@ import org.apache.nifi.util.NiFiProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- *
- */
 public class StandardMiNiFiServer extends HeadlessNiFiServer implements MiNiFiServer {
 
     private static final Logger logger = LoggerFactory.getLogger(StandardMiNiFiServer.class);
-    public static final String BOOTSTRAP_PORT_PROPERTY = "nifi.bootstrap.listen.port";
+    private static final String BOOTSTRAP_PORT_PROPERTY = "nifi.bootstrap.listen.port";
+    private static final String LISTENER_BOOTSTRAP_PORT = "nifi.listener.bootstrap.port";
 
     private BootstrapListener bootstrapListener;
-
-    /* A reference to the client service for handling*/
     private C2NifiClientService c2NifiClientService;
-
-
-    public StandardMiNiFiServer() {
-        super();
-    }
-
-    public FlowStatusReport getStatusReport(String requestString) throws StatusRequestException {
-        return StatusConfigReporter.getStatus(getFlowController(), requestString, logger);
-    }
 
     @Override
     public void start() {
@@ -65,6 +55,16 @@ public class StandardMiNiFiServer extends HeadlessNiFiServer implements MiNiFiSe
         initC2();
         sendStartedStatus();
         startHeartbeat();
+    }
+
+    @Override
+    protected void validateFlow() {
+        List<ValidationResult> validationErrors = validate(getFlowController().getFlowManager());
+        if (!validationErrors.isEmpty()) {
+            logger.error("Validation errors found when loading the flow: {}", validationErrors);
+            throw new IllegalStateException("Unable to start flow due to validation errors");
+        }
+        logger.info("Flow validated successfully");
     }
 
     @Override
@@ -84,6 +84,10 @@ public class StandardMiNiFiServer extends HeadlessNiFiServer implements MiNiFiSe
         if (c2NifiClientService != null) {
             c2NifiClientService.stop();
         }
+    }
+
+    public FlowStatusReport getStatusReport(String requestString) throws StatusRequestException {
+        return StatusConfigReporter.getStatus(getFlowController(), requestString, logger);
     }
 
     private void initC2() {
@@ -128,7 +132,11 @@ public class StandardMiNiFiServer extends HeadlessNiFiServer implements MiNiFiSe
 
                 bootstrapListener = new BootstrapListener(this, port);
                 NiFiProperties niFiProperties = getNiFiProperties();
-                bootstrapListener.start(niFiProperties.getDefaultListenerBootstrapPort());
+
+                // Default to 0 for random ephemeral port number
+                final String listenerBootstrapPortProperty = niFiProperties.getProperty(LISTENER_BOOTSTRAP_PORT, "0");
+                final int listenerBootstrapPort = Integer.parseInt(listenerBootstrapPortProperty);
+                bootstrapListener.start(listenerBootstrapPort);
             } catch (IOException e) {
                 throw new UncheckedIOException("Failed to start MiNiFi because of Bootstrap listener initialization error", e);
             } catch (NumberFormatException e) {

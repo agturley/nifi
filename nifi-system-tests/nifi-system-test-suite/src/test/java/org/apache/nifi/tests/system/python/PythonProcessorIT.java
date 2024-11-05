@@ -84,7 +84,6 @@ public class PythonProcessorIT extends NiFiSystemIT {
         assertEquals(messageContents, contents);
     }
 
-
     @Test
     public void testRecordTransform() throws NiFiClientException, IOException, InterruptedException {
         final ProcessorEntity generate = getClientUtil().createProcessor("GenerateFlowFile");
@@ -170,5 +169,125 @@ public class PythonProcessorIT extends NiFiSystemIT {
         assertEquals("3", secondRecordValues.get( headerIndices.get("age") ));
         assertEquals("Ball", secondRecordValues.get( headerIndices.get("sport") ));
         assertEquals("HELLO", secondRecordValues.get( headerIndices.get("greeting") ));
+    }
+
+    @Test
+    public void testRecordTransformPartitioning() throws NiFiClientException, IOException, InterruptedException {
+        final ProcessorEntity generate = getClientUtil().createProcessor("GenerateFlowFile");
+        final ProcessorEntity setRecordField = getClientUtil().createPythonProcessor("SetRecordField");
+        final ProcessorEntity terminate = getClientUtil().createProcessor("TerminateFlowFile");
+
+        // Add Reader and Writer
+        final ControllerServiceEntity csvReader = getClientUtil().createControllerService("MockCSVReader");
+        final ControllerServiceEntity csvWriter = getClientUtil().createControllerService("MockCSVWriter");
+
+        getClientUtil().enableControllerService(csvReader);
+        getClientUtil().enableControllerService(csvWriter);
+
+        // Configure the SetRecordField property
+        final Map<String, String> fieldMap = new HashMap<>();
+        fieldMap.put("Record Reader", csvReader.getId());
+        fieldMap.put("Record Writer", csvWriter.getId());
+        getClientUtil().updateProcessorProperties(setRecordField, fieldMap);
+        getClientUtil().setAutoTerminatedRelationships(setRecordField, new HashSet<>(Arrays.asList("original", "failure")));
+
+        // Set contents of GenerateFlowFile
+        getClientUtil().updateProcessorProperties(generate,
+            Collections.singletonMap("Text", "name, group\nJane Doe, default\nJake Doe, other"));
+
+        // Connect flow
+        getClientUtil().createConnection(generate, setRecordField, "success");
+        final ConnectionEntity outputConnection = getClientUtil().createConnection(setRecordField, terminate, "success");
+
+        // Wait for processor validation to complete
+        getClientUtil().waitForValidProcessor(generate.getId());
+        getClientUtil().waitForValidProcessor(setRecordField.getId());
+
+        // Run the flow
+        getClientUtil().startProcessor(generate);
+        getClientUtil().startProcessor(setRecordField);
+
+        // Wait for output data
+        waitForQueueCount(outputConnection.getId(), 2);
+
+        // Verify output contents. We don't know the order that the fields will be in, but we know that we should get back 2 fields per record: name, group.
+        final String ff1Contents = getClientUtil().getFlowFileContentAsUtf8(outputConnection.getId(), 0);
+        final String[] ff1Lines = ff1Contents.split("\n");
+        final String ff1HeaderLine = ff1Lines[0];
+        final List<String> ff1Headers = Stream.of(ff1HeaderLine.split(","))
+            .map(String::trim)
+            .toList();
+        assertTrue(ff1Headers.contains("name"));
+        assertTrue(ff1Headers.contains("group"));
+
+        final Map<String, Integer> ff1HeaderIndices = new HashMap<>();
+        int index = 0;
+        for (final String header : ff1Headers) {
+            ff1HeaderIndices.put(header, index++);
+        }
+
+        final String firstRecordLine = ff1Lines[1];
+        final List<String> firstRecordValues = Stream.of(firstRecordLine.split(","))
+            .map(String::trim)
+            .toList();
+        assertEquals("Jane Doe", firstRecordValues.get( ff1HeaderIndices.get("name") ));
+        assertEquals("default", firstRecordValues.get( ff1HeaderIndices.get("group") ));
+
+        final String ff2Contents = getClientUtil().getFlowFileContentAsUtf8(outputConnection.getId(), 1);
+        final String[] ff2Lines = ff2Contents.split("\n");
+        final String ff2HeaderLine = ff2Lines[0];
+        final List<String> ff2Headers = Stream.of(ff2HeaderLine.split(","))
+            .map(String::trim)
+            .toList();
+        assertTrue(ff2Headers.contains("name"));
+        assertTrue(ff2Headers.contains("group"));
+
+        final Map<String, Integer> headerIndices = new HashMap<>();
+        index = 0;
+        for (final String header : ff2Headers) {
+            headerIndices.put(header, index++);
+        }
+
+        final String secondRecordLine = ff2Lines[1];
+        final List<String> secondRecordValues = Stream.of(secondRecordLine.split(","))
+            .map(String::trim)
+            .toList();
+        assertEquals("Jake Doe", secondRecordValues.get( headerIndices.get("name") ));
+        assertEquals("other", secondRecordValues.get( headerIndices.get("group") ));
+    }
+
+    @Test
+    public void testFlowFileSource() throws NiFiClientException, IOException, InterruptedException {
+        final String messageContents = "Hello World";
+
+        final ProcessorEntity createFlowFilePython = getClientUtil().createPythonProcessor("CreateFlowFile");
+        final ProcessorEntity terminate = getClientUtil().createProcessor("TerminateFlowFile");
+
+        // Config CreateFlowFile with "Hello World" as the value of "FlowFile Contents" attribute
+        final ProcessorConfigDTO generateConfig = createFlowFilePython.getComponent().getConfig();
+        generateConfig.setProperties(Collections.singletonMap("FlowFile Contents", messageContents));
+        getClientUtil().updateProcessorConfig(createFlowFilePython, generateConfig);
+
+        // Connect the processors
+        final ConnectionEntity outputConnection = getClientUtil().createConnection(createFlowFilePython, terminate, "success");
+        getClientUtil().setAutoTerminatedRelationships(createFlowFilePython, "multiline");
+
+        // Wait for processor validation to complete
+        getClientUtil().waitForValidProcessor(createFlowFilePython.getId());
+
+        // Run the flow
+        runProcessorOnce(createFlowFilePython);
+
+        // Wait for output to be queued up
+        waitForQueueCount(outputConnection.getId(), 1);
+
+        // Validate the output
+        final String contents = getClientUtil().getFlowFileContentAsUtf8(outputConnection.getId(), 0);
+        assertEquals(messageContents, contents);
+    }
+
+    private void runProcessorOnce(final ProcessorEntity processorEntity) throws NiFiClientException, IOException, InterruptedException {
+        getNifiClient().getProcessorClient().runProcessorOnce(processorEntity);
+        getClientUtil().waitForStoppedProcessor(processorEntity.getId());
     }
 }

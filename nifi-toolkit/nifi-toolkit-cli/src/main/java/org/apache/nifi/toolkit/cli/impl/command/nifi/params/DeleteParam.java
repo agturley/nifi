@@ -70,11 +70,11 @@ public class DeleteParam extends AbstractUpdateParamContextCommand<VoidResult> {
 
         // Determine if this is an existing param or a new one...
         final Optional<ParameterDTO> existingParam = existingEntity.getComponent().getParameters().stream()
-                .map(p -> p.getParameter())
+                .map(ParameterEntity::getParameter)
                 .filter(p -> p.getName().equals(paramName))
                 .findFirst();
 
-        if (!existingParam.isPresent()) {
+        if (existingParam.isEmpty()) {
             throw new NiFiClientException("Unable to delete parameter, no parameter found with name '" + paramName + "'");
         }
 
@@ -83,6 +83,7 @@ public class DeleteParam extends AbstractUpdateParamContextCommand<VoidResult> {
         parameterDTO.setValue(null);
         parameterDTO.setDescription(null);
         parameterDTO.setSensitive(null);
+        parameterDTO.setReferencedAssets(null);
 
         final ParameterEntity parameterEntity = new ParameterEntity();
         parameterEntity.setParameter(parameterDTO);

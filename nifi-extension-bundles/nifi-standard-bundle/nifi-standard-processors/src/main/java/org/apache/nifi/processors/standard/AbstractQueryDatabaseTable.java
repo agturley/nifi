@@ -69,23 +69,23 @@ public abstract class AbstractQueryDatabaseTable extends AbstractDatabaseFetchPr
     public static final String RESULT_TABLENAME = "tablename";
     public static final String RESULT_ROW_COUNT = "querydbtable.row.count";
 
-    private static AllowableValue TRANSACTION_READ_COMMITTED = new AllowableValue(
+    private static final AllowableValue TRANSACTION_READ_COMMITTED = new AllowableValue(
             String.valueOf(Connection.TRANSACTION_READ_COMMITTED),
             "TRANSACTION_READ_COMMITTED"
     );
-    private static AllowableValue TRANSACTION_READ_UNCOMMITTED = new AllowableValue(
+    private static final AllowableValue TRANSACTION_READ_UNCOMMITTED = new AllowableValue(
             String.valueOf(Connection.TRANSACTION_READ_UNCOMMITTED),
             "TRANSACTION_READ_UNCOMMITTED"
     );
-    private static AllowableValue TRANSACTION_REPEATABLE_READ = new AllowableValue(
+    private static final AllowableValue TRANSACTION_REPEATABLE_READ = new AllowableValue(
             String.valueOf(Connection.TRANSACTION_REPEATABLE_READ),
             "TRANSACTION_REPEATABLE_READ"
     );
-    private static AllowableValue TRANSACTION_NONE =  new AllowableValue(
+    private static final AllowableValue TRANSACTION_NONE =  new AllowableValue(
             String.valueOf(Connection.TRANSACTION_NONE),
             "TRANSACTION_NONE"
     );
-    private static AllowableValue TRANSACTION_SERIALIZABLE = new AllowableValue(
+    private static final AllowableValue TRANSACTION_SERIALIZABLE = new AllowableValue(
             String.valueOf(Connection.TRANSACTION_SERIALIZABLE),
             "TRANSACTION_SERIALIZABLE"
     );
@@ -377,7 +377,7 @@ public abstract class AbstractQueryDatabaseTable extends AbstractDatabaseFetchPr
 
             st.setQueryTimeout(queryTimeout); // timeout in seconds
             if (logger.isDebugEnabled()) {
-                logger.debug("Executing query {}", new Object[] {selectQuery});
+                logger.debug("Executing query {}", selectQuery);
             }
 
             final boolean originalAutoCommit = con.getAutoCommit();
@@ -478,19 +478,22 @@ public abstract class AbstractQueryDatabaseTable extends AbstractDatabaseFetchPr
                 // Even though the maximum value and total count are known at this point, to maintain consistent behavior if Output Batch Size is set, do not store the attributes
                 if (outputBatchSize == 0) {
                     for (int i = 0; i < resultSetFlowFiles.size(); i++) {
+                        final Map<String, String> newAttributesMap = new HashMap<>();
+
                         // Add maximum values as attributes
                         for (Map.Entry<String, String> entry : statePropertyMap.entrySet()) {
                             // Get just the column name from the key
                             String key = entry.getKey();
                             String colName = key.substring(key.lastIndexOf(NAMESPACE_DELIMITER) + NAMESPACE_DELIMITER.length());
-                            resultSetFlowFiles.set(i, session.putAttribute(resultSetFlowFiles.get(i), "maxvalue." + colName, entry.getValue()));
+                            newAttributesMap.put("maxvalue." + colName, entry.getValue());
                         }
 
-                        //set count on all FlowFiles
+                        // Set count for all FlowFiles
                         if (maxRowsPerFlowFile > 0) {
-                            resultSetFlowFiles.set(i,
-                                    session.putAttribute(resultSetFlowFiles.get(i), FRAGMENT_COUNT, Integer.toString(fragmentIndex)));
+                            newAttributesMap.put(FRAGMENT_COUNT, Integer.toString(fragmentIndex));
                         }
+
+                        resultSetFlowFiles.set(i, session.putAllAttributes(resultSetFlowFiles.get(i), newAttributesMap));
                     }
                 }
             } catch (final SQLException e) {
@@ -520,7 +523,7 @@ public abstract class AbstractQueryDatabaseTable extends AbstractDatabaseFetchPr
                 // Update the state
                 session.setState(statePropertyMap, Scope.CLUSTER);
             } catch (IOException ioe) {
-                getLogger().error("{} failed to update State Manager, maximum observed values will not be recorded", new Object[]{this, ioe});
+                getLogger().error("{} failed to update State Manager, maximum observed values will not be recorded", this, ioe);
             }
 
             session.commitAsync();

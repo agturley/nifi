@@ -30,7 +30,6 @@ import org.apache.nifi.serialization.RecordReader;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -131,7 +130,7 @@ public class RecordBinManager {
 
             if (accepted) {
                 acceptedBin = bin;
-                logger.debug("Transferred id={} to {}", new Object[] {flowFile.getId(), bin});
+                logger.debug("Transferred id={} to {}", flowFile.getId(), bin);
                 break;
             }
         }
@@ -139,7 +138,7 @@ public class RecordBinManager {
         // We have to do this outside of our for-loop above in order to avoid a concurrent modification Exception.
         if (acceptedBin != null) {
             if (acceptedBin.isComplete()) {
-                removeBins(groupIdentifier, Collections.singletonList(acceptedBin));
+                removeBins(groupIdentifier, List.of(acceptedBin));
             }
 
             return;
@@ -154,7 +153,7 @@ public class RecordBinManager {
             throw new RuntimeException("Attempted to add " + flowFile + " to a new bin but failed. This is unexpected. Will roll back session and try again.");
         }
 
-        logger.debug("Transferred id={} to {}", new Object[] {flowFile.getId(), bin});
+        logger.debug("Transferred id={} to {}", flowFile.getId(), bin);
 
         if (!bin.isComplete()) {
             final int updatedBinCount = binCount.incrementAndGet();
@@ -226,12 +225,12 @@ public class RecordBinManager {
                 return;
             }
 
-            removeBins(oldestBinGroup, Collections.singletonList(oldestBin));
+            removeBins(oldestBinGroup, List.of(oldestBin));
         } finally {
             lock.unlock();
         }
 
-        logger.debug("Completing Bin " + oldestBin + " because the maximum number of bins has been exceeded");
+        logger.debug("Completing Bin {} because the maximum number of bins has been exceeded", oldestBin);
         oldestBin.complete("Maximum number of bins has been exceeded");
     }
 
@@ -275,7 +274,7 @@ public class RecordBinManager {
             final List<RecordBin> completeBins = entry.getValue();
 
             for (final RecordBin bin : completeBins) {
-                logger.debug("Completing Bin {} because {}", new Object[]{bin, completionReason});
+                logger.debug("Completing Bin {} because {}", bin, completionReason);
                 bin.complete(completionReason);
                 completed++;
             }

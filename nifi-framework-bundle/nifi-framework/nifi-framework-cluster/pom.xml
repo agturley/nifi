@@ -14,7 +14,7 @@
     <parent>
         <groupId>org.apache.nifi</groupId>
         <artifactId>nifi-framework</artifactId>
-        <version>2.0.0-SNAPSHOT</version>
+        <version>2.1.0-SNAPSHOT</version>
     </parent>
     <artifactId>nifi-framework-cluster</artifactId>
     <packaging>jar</packaging>
@@ -31,12 +31,22 @@
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-utils</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-framework-components</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-web-client-api</artifactId>
+            <version>2.1.0-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-web-client</artifactId>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.commons</groupId>
@@ -54,17 +64,17 @@
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-client-dto</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-parameter</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-framework-cluster-zookeeper</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.security</groupId>
@@ -76,34 +86,24 @@
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
-            <artifactId>nifi-socket-utils</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-security-utils-api</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-framework-nar-utils</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-framework-authorization-providers</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
 
         <dependency>
-            <groupId>org.jetbrains</groupId>
-            <artifactId>annotations</artifactId>
-            <version>24.1.0</version>
-        </dependency>
-        <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>c2-protocol-component-api</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.curator</groupId>
@@ -124,47 +124,42 @@
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-web-security</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-framework-authorization</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-framework-status-history-shared</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-framework-core</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-framework-core-api</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-framework-cluster-protocol</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.nifi</groupId>
-            <artifactId>nifi-security-utils</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-site-to-site-client</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-py4j-bridge</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
 
@@ -207,10 +202,6 @@
             <groupId>jakarta.xml.bind</groupId>
             <artifactId>jakarta.xml.bind-api</artifactId>
         </dependency>
-        <dependency>
-            <groupId>com.squareup.okhttp3</groupId>
-            <artifactId>okhttp</artifactId>
-        </dependency>
 
         <!-- spring dependencies -->
         <dependency>
@@ -235,7 +226,7 @@
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-mock</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -249,6 +240,18 @@
                         <exclude>src/test/resources/org/apache/nifi/cluster/firewall/impl/empty.txt</exclude>
                         <exclude>src/test/resources/org/apache/nifi/cluster/firewall/impl/ips.txt</exclude>
                     </excludes>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <!-- Add Implementation-Version for User-Agent Header in replicated requests -->
+                            <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+                        </manifest>
+                    </archive>
                 </configuration>
             </plugin>
         </plugins>

@@ -93,40 +93,21 @@ class TestRuntimeManifest {
         assertProcessorDefinitionFound(bundles);
         assertRestrictionsFound(bundles);
 
-        // Verify ConsumeKafka_2_6 definition which has properties with dependencies
-        final ProcessorDefinition consumeKafkaDefinition = getProcessorDefinition(bundles, "nifi-kafka-2-6-nar",
-                "org.apache.nifi.processors.kafka.pubsub.ConsumeKafka_2_6");
-        assertTrue(consumeKafkaDefinition.isAdditionalDetails());
+        // Verify TailFile definition which has properties with dependencies
+        final ProcessorDefinition tailFileDefinition = getProcessorDefinition(bundles, "nifi-standard-nar",
+                "org.apache.nifi.processors.standard.TailFile");
+        assertTrue(tailFileDefinition.isAdditionalDetails());
 
-        final PropertyDescriptor maxUncommitProp = getPropertyDescriptor(consumeKafkaDefinition, "max-uncommit-offset-wait");
-        final List<PropertyDependency> propertyDependencies = maxUncommitProp.getDependencies();
+        final PropertyDescriptor lineStartPattern = getPropertyDescriptor(tailFileDefinition, "Line Start Pattern");
+        final List<PropertyDependency> propertyDependencies = lineStartPattern.getDependencies();
         assertNotNull(propertyDependencies);
         assertEquals(1, propertyDependencies.size());
 
-        final PropertyDependency propertyMaxUncommitDependency = propertyDependencies.get(0);
-        assertEquals("Commit Offsets", propertyMaxUncommitDependency.getPropertyName());
-        assertNotNull(propertyMaxUncommitDependency.getDependentValues());
-        assertEquals(1, propertyMaxUncommitDependency.getDependentValues().size());
-        assertEquals("true", propertyMaxUncommitDependency.getDependentValues().get(0));
-
-        // Verify PrometheusReportingTask definition which also has @DefaultSchedule
-        final ReportingTaskDefinition prometheusReportingTaskDef = getReportingTaskDefinition(bundles, "nifi-prometheus-nar",
-                "org.apache.nifi.reporting.prometheus.PrometheusReportingTask");
-
-        assertEquals(SchedulingStrategy.TIMER_DRIVEN.name(), prometheusReportingTaskDef.getDefaultSchedulingStrategy());
-
-        final List<String> prometheusSchedulingStrategies = prometheusReportingTaskDef.getSupportedSchedulingStrategies();
-        assertNotNull(prometheusSchedulingStrategies);
-        assertEquals(2, prometheusSchedulingStrategies.size());
-        assertTrue(prometheusSchedulingStrategies.contains(SchedulingStrategy.TIMER_DRIVEN.name()));
-        assertTrue(prometheusSchedulingStrategies.contains(SchedulingStrategy.CRON_DRIVEN.name()));
-
-        final Map<String, String> prometheusDefaultSchedulingPeriods = prometheusReportingTaskDef.getDefaultSchedulingPeriodBySchedulingStrategy();
-        assertNotNull(prometheusDefaultSchedulingPeriods);
-        assertEquals(2, prometheusDefaultSchedulingPeriods.size());
-        // TIMER_DRIVEN period should come from the @DefaultSchedule annotation that overrides the default value
-        assertEquals(REPORTING_TASK_DEFAULT_SCHEDULE_TIME, prometheusDefaultSchedulingPeriods.get(SchedulingStrategy.TIMER_DRIVEN.name()));
-        assertEquals(SchedulingStrategy.CRON_DRIVEN.getDefaultSchedulingPeriod(), prometheusDefaultSchedulingPeriods.get(SchedulingStrategy.CRON_DRIVEN.name()));
+        final PropertyDependency lineStartPatternDependency = propertyDependencies.get(0);
+        assertEquals("tail-mode", lineStartPatternDependency.getPropertyName());
+        assertNotNull(lineStartPatternDependency.getDependentValues());
+        assertEquals(1, lineStartPatternDependency.getDependentValues().size());
+        assertEquals("Single file", lineStartPatternDependency.getDependentValues().get(0));
 
         final ProcessorDefinition joltTransformDef = getProcessorDefinition(bundles, "nifi-jolt-nar",
                 "org.apache.nifi.processors.jolt.JoltTransformRecord");

@@ -34,12 +34,11 @@ import org.apache.nifi.expression.ExpressionLanguageScope;
 import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.reporting.InitializationException;
-import org.apache.nifi.security.util.KeyStoreUtils;
+import org.apache.nifi.security.ssl.StandardKeyStoreBuilder;
+import org.apache.nifi.security.ssl.StandardSslContextBuilder;
+import org.apache.nifi.security.ssl.StandardTrustManagerBuilder;
 import org.apache.nifi.security.util.KeystoreType;
-import org.apache.nifi.security.util.SslContextFactory;
-import org.apache.nifi.security.util.StandardTlsConfiguration;
 import org.apache.nifi.security.util.TlsConfiguration;
-import org.apache.nifi.security.util.TlsException;
 import org.apache.nifi.security.util.TlsPlatform;
 import org.apache.nifi.util.StringUtils;
 
@@ -47,10 +46,17 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 import java.io.File;
-import java.net.MalformedURLException;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -128,27 +134,22 @@ public class StandardSSLContextService extends AbstractControllerService impleme
             .sensitive(false)
             .build();
 
-    private static final List<PropertyDescriptor> properties;
+    private static final List<PropertyDescriptor> properties = List.of(
+            KEYSTORE,
+            KEYSTORE_PASSWORD,
+            KEY_PASSWORD,
+            KEYSTORE_TYPE,
+            TRUSTSTORE,
+            TRUSTSTORE_PASSWORD,
+            TRUSTSTORE_TYPE,
+            SSL_ALGORITHM
+    );
 
     protected ConfigurationContext configContext;
     private boolean isValidated;
 
-    // TODO: This can be made configurable if necessary
     private static final int VALIDATION_CACHE_EXPIRATION = 5;
     private int validationCacheCount = 0;
-
-    static {
-        List<PropertyDescriptor> props = new ArrayList<>();
-        props.add(KEYSTORE);
-        props.add(KEYSTORE_PASSWORD);
-        props.add(KEY_PASSWORD);
-        props.add(KEYSTORE_TYPE);
-        props.add(TRUSTSTORE);
-        props.add(TRUSTSTORE_PASSWORD);
-        props.add(TRUSTSTORE_TYPE);
-        props.add(SSL_ALGORITHM);
-        properties = Collections.unmodifiableList(props);
-    }
 
     @OnEnabled
     public void onConfigured(final ConfigurationContext context) throws InitializationException {
@@ -244,16 +245,46 @@ public class StandardSSLContextService extends AbstractControllerService impleme
      */
     @Override
     public SSLContext createContext() {
-        final TlsConfiguration tlsConfiguration = createTlsConfiguration();
-        if (!tlsConfiguration.isTruststorePopulated()) {
-            getLogger().warn("Trust Store properties not found: using platform default Certificate Authorities");
-        }
-
         try {
-            final TrustManager[] trustManagers = SslContextFactory.getTrustManagers(tlsConfiguration);
-            return SslContextFactory.createSslContext(tlsConfiguration, trustManagers);
-        } catch (final TlsException e) {
-            getLogger().error("Unable to create SSLContext: {}", e.getLocalizedMessage());
+            final String protocol = getSslAlgorithm();
+            final StandardSslContextBuilder sslContextBuilder = new StandardSslContextBuilder().protocol(protocol);
+
+            final TrustManager trustManager;
+            final String trustStoreFile = getKeyStoreFile();
+            if (trustStoreFile == null || trustStoreFile.isBlank()) {
+                getLogger().debug("Trust Store File not configured");
+            } else {
+                trustManager = createTrustManager();
+                sslContextBuilder.trustManager(trustManager);
+            }
+
+            final String keyStoreFile = getKeyStoreFile();
+            if (keyStoreFile == null || keyStoreFile.isBlank()) {
+                getLogger().debug("Key Store File not configured");
+            } else {
+                final StandardKeyStoreBuilder keyStoreBuilder = new StandardKeyStoreBuilder();
+                keyStoreBuilder.type(getKeyStoreType());
+                keyStoreBuilder.password(getKeyStorePassword().toCharArray());
+
+                final Path keyStorePath = Paths.get(keyStoreFile);
+                try (InputStream keyStoreInputStream = Files.newInputStream(keyStorePath)) {
+                    keyStoreBuilder.inputStream(keyStoreInputStream);
+                    final KeyStore keyStore = keyStoreBuilder.build();
+                    sslContextBuilder.keyStore(keyStore);
+                }
+
+                final char[] keyProtectionPassword;
+                final String keyPassword = getKeyPassword();
+                if (keyPassword == null) {
+                    keyProtectionPassword = getKeyStorePassword().toCharArray();
+                } else {
+                    keyProtectionPassword = keyPassword.toCharArray();
+                }
+                sslContextBuilder.keyPassword(keyProtectionPassword);
+            }
+
+            return sslContextBuilder.build();
+        } catch (final Exception e) {
             throw new ProcessException("Unable to create SSLContext", e);
         }
     }
@@ -266,12 +297,28 @@ public class StandardSSLContextService extends AbstractControllerService impleme
     @Override
     public X509TrustManager createTrustManager() {
         try {
-            final X509TrustManager trustManager = SslContextFactory.getX509TrustManager(createTlsConfiguration());
-            if (trustManager == null) {
-                throw new ProcessException("X.509 Trust Manager not found using configured properties");
+            final char[] password;
+            final String trustStorePassword = getTrustStorePassword();
+            if (trustStorePassword == null || trustStorePassword.isBlank()) {
+                password = null;
+            } else {
+                password = trustStorePassword.toCharArray();
             }
-            return trustManager;
-        } catch (final TlsException e) {
+
+            final StandardKeyStoreBuilder builder = new StandardKeyStoreBuilder().type(getTrustStoreType()).password(password);
+
+            final String trustStoreFile = getTrustStoreFile();
+            if (trustStoreFile == null || trustStoreFile.isBlank()) {
+                throw new ProcessException("Trust Store File not specified");
+            }
+
+            final Path trustStorePath = Paths.get(trustStoreFile);
+            try (InputStream trustStoreInputStream = Files.newInputStream(trustStorePath)) {
+                builder.inputStream(trustStoreInputStream);
+                final KeyStore trustStore = builder.build();
+                return new StandardTrustManagerBuilder().trustStore(trustStore).build();
+            }
+        } catch (final Exception e) {
             throw new ProcessException("Unable to create X.509 Trust Manager", e);
         }
     }
@@ -461,21 +508,14 @@ public class StandardSSLContextService extends AbstractControllerService impleme
             if (!StringUtils.isBlank(password)) {
                 passwordChars = password.toCharArray();
             }
-            try {
-                final boolean storeValid = KeyStoreUtils.isStoreValid(file.toURI().toURL(), KeystoreType.valueOf(type), passwordChars);
-                if (!storeValid) {
-                    results.add(new ValidationResult.Builder()
-                            .subject("Truststore Properties")
-                            .valid(false)
-                            .explanation("Invalid truststore password or type specified for file " + filename)
-                            .build());
-                }
 
-            } catch (MalformedURLException e) {
+            try {
+                loadKeyStore(file, KeystoreType.valueOf(type), passwordChars);
+            } catch (final Exception e) {
                 results.add(new ValidationResult.Builder()
                         .subject("Truststore Properties")
                         .valid(false)
-                        .explanation("Malformed URL from file: " + e)
+                        .explanation("Invalid truststore password or type specified for file [%s]: %s".formatted(filename, e.getLocalizedMessage()))
                         .build());
             }
         }
@@ -508,28 +548,30 @@ public class StandardSSLContextService extends AbstractControllerService impleme
             if (!StringUtils.isBlank(password)) {
                 passwordChars = password.toCharArray();
             }
+            KeyStore keyStore = null;
+
             try {
-                final boolean storeValid = KeyStoreUtils.isStoreValid(file.toURI().toURL(), KeystoreType.valueOf(type), passwordChars);
-                if (!storeValid) {
-                    results.add(new ValidationResult.Builder()
-                            .subject("Keystore Properties")
-                            .valid(false)
-                            .explanation("Invalid keystore password or type specified for file " + filename)
-                            .build());
-                }
+                keyStore = loadKeyStore(file, KeystoreType.valueOf(type), passwordChars);
+            } catch (final Exception e) {
+                results.add(new ValidationResult.Builder()
+                        .subject("Keystore Properties")
+                        .valid(false)
+                        .explanation("Invalid keystore password or type specified for file [%s]: %s".formatted(filename, e.getLocalizedMessage()))
+                        .build());
+            }
 
-                // The key password can be explicitly set (and can be the same as the
-                // keystore password or different), or it can be left blank. In the event
-                // it's blank, the keystore password will be used
-                char[] keyPasswordChars = new char[0];
-                if (StringUtils.isBlank(keyPassword) || keyPassword.equals(password)) {
-                    keyPasswordChars = passwordChars;
-                }
-                if (!StringUtils.isBlank(keyPassword)) {
-                    keyPasswordChars = keyPassword.toCharArray();
-                }
-
-                boolean keyPasswordValid = KeyStoreUtils.isKeyPasswordCorrect(file.toURI().toURL(), KeystoreType.valueOf(type), passwordChars, keyPasswordChars);
+            // The key password can be explicitly set (and can be the same as the
+            // keystore password or different), or it can be left blank. In the event
+            // it's blank, the keystore password will be used
+            char[] keyPasswordChars = new char[0];
+            if (StringUtils.isBlank(keyPassword) || keyPassword.equals(password)) {
+                keyPasswordChars = passwordChars;
+            }
+            if (!StringUtils.isBlank(keyPassword)) {
+                keyPasswordChars = keyPassword.toCharArray();
+            }
+            if (keyStore != null) {
+                boolean keyPasswordValid = isKeyPasswordValid(keyStore, keyPasswordChars);
                 if (!keyPasswordValid) {
                     results.add(new ValidationResult.Builder()
                             .subject("Keystore Properties")
@@ -537,13 +579,6 @@ public class StandardSSLContextService extends AbstractControllerService impleme
                             .explanation("Invalid key password specified for file " + filename)
                             .build());
                 }
-
-            } catch (MalformedURLException e) {
-                results.add(new ValidationResult.Builder()
-                        .subject("Keystore Properties")
-                        .valid(false)
-                        .explanation("Malformed URL from file: " + e)
-                        .build());
             }
         }
 
@@ -572,5 +607,28 @@ public class StandardSSLContextService extends AbstractControllerService impleme
         }
 
         return allowableValues.toArray(new AllowableValue[0]);
+    }
+
+    private static KeyStore loadKeyStore(final File storeFile, final KeystoreType storeType, final char[] storePassword) throws GeneralSecurityException, IOException {
+        try (InputStream inputStream = new FileInputStream(storeFile)) {
+            final KeyStore keyStore = KeyStore.getInstance(storeType.getType());
+            keyStore.load(inputStream, storePassword);
+            return keyStore;
+        }
+    }
+
+    private static boolean isKeyPasswordValid(final KeyStore keyStore, final char[] keyPassword) {
+        try {
+            final Enumeration<String> aliases = keyStore.aliases();
+            if (aliases.hasMoreElements()) {
+                final String alias = aliases.nextElement();
+                keyStore.getKey(alias, keyPassword);
+                return true;
+            } else {
+                return false;
+            }
+        } catch (final Exception e) {
+            return false;
+        }
     }
 }

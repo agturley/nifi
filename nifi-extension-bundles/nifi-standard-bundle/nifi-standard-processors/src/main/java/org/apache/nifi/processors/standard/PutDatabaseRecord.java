@@ -16,8 +16,43 @@
  */
 package org.apache.nifi.processors.standard;
 
+import static java.lang.String.format;
+import static org.apache.nifi.expression.ExpressionLanguageScope.ENVIRONMENT;
+import static org.apache.nifi.expression.ExpressionLanguageScope.FLOWFILE_ATTRIBUTES;
+import static org.apache.nifi.expression.ExpressionLanguageScope.NONE;
+
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.sql.BatchUpdateException;
+import java.sql.Clob;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
+import java.sql.SQLDataException;
+import java.sql.SQLException;
+import java.sql.SQLIntegrityConstraintViolationException;
+import java.sql.SQLTransientException;
+import java.sql.Statement;
+import java.sql.Types;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
+import java.util.ServiceLoader;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.nifi.annotation.behavior.InputRequirement;
 import org.apache.nifi.annotation.behavior.InputRequirement.Requirement;
@@ -27,7 +62,6 @@ import org.apache.nifi.annotation.documentation.CapabilityDescription;
 import org.apache.nifi.annotation.documentation.Tags;
 import org.apache.nifi.annotation.documentation.UseCase;
 import org.apache.nifi.annotation.lifecycle.OnScheduled;
-import org.apache.nifi.annotation.lifecycle.OnUnscheduled;
 import org.apache.nifi.components.AllowableValue;
 import org.apache.nifi.components.PropertyDescriptor;
 import org.apache.nifi.components.PropertyDescriptor.Builder;
@@ -60,44 +94,6 @@ import org.apache.nifi.serialization.record.RecordFieldType;
 import org.apache.nifi.serialization.record.RecordSchema;
 import org.apache.nifi.serialization.record.util.DataTypeUtils;
 import org.apache.nifi.serialization.record.util.IllegalTypeConversionException;
-
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.sql.BatchUpdateException;
-import java.sql.Clob;
-import java.sql.Connection;
-import java.sql.DatabaseMetaData;
-import java.sql.PreparedStatement;
-import java.sql.SQLDataException;
-import java.sql.SQLException;
-import java.sql.SQLFeatureNotSupportedException;
-import java.sql.SQLIntegrityConstraintViolationException;
-import java.sql.SQLTransientException;
-import java.sql.Statement;
-import java.sql.Types;
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.HexFormat;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.ServiceLoader;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Function;
-import java.util.stream.Collectors;
-
-import static java.lang.String.format;
-import static org.apache.nifi.expression.ExpressionLanguageScope.FLOWFILE_ATTRIBUTES;
-import static org.apache.nifi.expression.ExpressionLanguageScope.NONE;
-import static org.apache.nifi.expression.ExpressionLanguageScope.ENVIRONMENT;
 
 @InputRequirement(Requirement.INPUT_REQUIRED)
 @Tags({"sql", "record", "jdbc", "put", "database", "update", "insert", "delete"})
@@ -159,7 +155,11 @@ public class PutDatabaseRecord extends AbstractProcessor {
                     + "such as an invalid query or an integrity constraint violation")
             .build();
 
-    protected static Set<Relationship> relationships;
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(
+            REL_SUCCESS,
+            REL_FAILURE,
+            REL_RETRY
+    );
 
     // Properties
     static final PropertyDescriptor RECORD_READER_FACTORY = new Builder()
@@ -307,6 +307,17 @@ public class PutDatabaseRecord extends AbstractProcessor {
             .dependsOn(STATEMENT_TYPE, UPDATE_TYPE, UPSERT_TYPE, SQL_TYPE, USE_ATTR_TYPE, USE_RECORD_PATH)
             .build();
 
+    static final PropertyDescriptor DELETE_KEYS = new Builder()
+            .name("Delete Keys")
+            .description("A comma-separated list of column names that uniquely identifies a row in the database for DELETE statements. "
+                    + "If the Statement Type is DELETE and this property is not set, the table's columns are used. "
+                    + "This property is ignored if the Statement Type is not DELETE")
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
+            .required(false)
+            .expressionLanguageSupported(FLOWFILE_ATTRIBUTES)
+            .dependsOn(STATEMENT_TYPE, DELETE_TYPE, SQL_TYPE, USE_ATTR_TYPE, USE_RECORD_PATH)
+            .build();
+
     static final PropertyDescriptor FIELD_CONTAINING_SQL = new Builder()
             .name("put-db-record-field-containing-sql")
             .displayName("Field Containing SQL")
@@ -385,13 +396,12 @@ public class PutDatabaseRecord extends AbstractProcessor {
             .allowableValues("true", "false")
             .defaultValue("false")
             .required(false)
-            .addValidator(StandardValidators.BOOLEAN_VALIDATOR)
             .build();
 
     static final PropertyDescriptor DB_TYPE;
 
     protected static final Map<String, DatabaseAdapter> dbAdapters;
-    protected static List<PropertyDescriptor> propDescriptors;
+    protected static List<PropertyDescriptor> properties;
     private Cache<SchemaKey, TableSchema> schemaCache;
 
     static {
@@ -414,53 +424,46 @@ public class PutDatabaseRecord extends AbstractProcessor {
             .required(false)
             .build();
 
-        final Set<Relationship> r = new HashSet<>();
-        r.add(REL_SUCCESS);
-        r.add(REL_FAILURE);
-        r.add(REL_RETRY);
-        relationships = Collections.unmodifiableSet(r);
-
-        final List<PropertyDescriptor> pds = new ArrayList<>();
-        pds.add(RECORD_READER_FACTORY);
-        pds.add(DB_TYPE);
-        pds.add(STATEMENT_TYPE);
-        pds.add(STATEMENT_TYPE_RECORD_PATH);
-        pds.add(DATA_RECORD_PATH);
-        pds.add(DBCP_SERVICE);
-        pds.add(CATALOG_NAME);
-        pds.add(SCHEMA_NAME);
-        pds.add(TABLE_NAME);
-        pds.add(BINARY_STRING_FORMAT);
-        pds.add(TRANSLATE_FIELD_NAMES);
-        pds.add(UNMATCHED_FIELD_BEHAVIOR);
-        pds.add(UNMATCHED_COLUMN_BEHAVIOR);
-        pds.add(UPDATE_KEYS);
-        pds.add(FIELD_CONTAINING_SQL);
-        pds.add(ALLOW_MULTIPLE_STATEMENTS);
-        pds.add(QUOTE_IDENTIFIERS);
-        pds.add(QUOTE_TABLE_IDENTIFIER);
-        pds.add(QUERY_TIMEOUT);
-        pds.add(RollbackOnFailure.ROLLBACK_ON_FAILURE);
-        pds.add(TABLE_SCHEMA_CACHE_SIZE);
-        pds.add(MAX_BATCH_SIZE);
-        pds.add(AUTO_COMMIT);
-
-        propDescriptors = Collections.unmodifiableList(pds);
+        properties = List.of(
+                RECORD_READER_FACTORY,
+                DB_TYPE,
+                STATEMENT_TYPE,
+                STATEMENT_TYPE_RECORD_PATH,
+                DATA_RECORD_PATH,
+                DBCP_SERVICE,
+                CATALOG_NAME,
+                SCHEMA_NAME,
+                TABLE_NAME,
+                BINARY_STRING_FORMAT,
+                TRANSLATE_FIELD_NAMES,
+                UNMATCHED_FIELD_BEHAVIOR,
+                UNMATCHED_COLUMN_BEHAVIOR,
+                UPDATE_KEYS,
+                DELETE_KEYS,
+                FIELD_CONTAINING_SQL,
+                ALLOW_MULTIPLE_STATEMENTS,
+                QUOTE_IDENTIFIERS,
+                QUOTE_TABLE_IDENTIFIER,
+                QUERY_TIMEOUT,
+                RollbackOnFailure.ROLLBACK_ON_FAILURE,
+                TABLE_SCHEMA_CACHE_SIZE,
+                MAX_BATCH_SIZE,
+                AUTO_COMMIT
+        );
     }
 
     private DatabaseAdapter databaseAdapter;
     private volatile Function<Record, String> recordPathOperationType;
     private volatile RecordPath dataRecordPath;
 
-
     @Override
     public Set<Relationship> getRelationships() {
-        return relationships;
+        return RELATIONSHIPS;
     }
 
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        return propDescriptors;
+        return properties;
     }
 
     @Override
@@ -479,21 +482,22 @@ public class PutDatabaseRecord extends AbstractProcessor {
             );
         }
 
-        final boolean autoCommit = validationContext.getProperty(AUTO_COMMIT).asBoolean();
+        final Boolean autoCommit = validationContext.getProperty(AUTO_COMMIT).asBoolean();
         final boolean rollbackOnFailure = validationContext.getProperty(RollbackOnFailure.ROLLBACK_ON_FAILURE).asBoolean();
-        if (autoCommit && rollbackOnFailure) {
+        if (autoCommit != null && autoCommit && rollbackOnFailure) {
             validationResults.add(new ValidationResult.Builder()
                     .subject(RollbackOnFailure.ROLLBACK_ON_FAILURE.getDisplayName())
                     .explanation(format("'%s' cannot be set to 'true' when '%s' is also set to 'true'. "
-                                    + "Transaction rollbacks for batch updates cannot be supported when auto commit is set to 'true'",
+                                    + "Transaction rollbacks for batch updates cannot rollback all the flow file's statements together "
+                                    + "when auto commit is set to 'true' because the database autocommits each batch separately.",
                             RollbackOnFailure.ROLLBACK_ON_FAILURE.getDisplayName(), AUTO_COMMIT.getDisplayName()))
                     .build());
         }
 
-        if (autoCommit && !isMaxBatchSizeHardcodedToZero(validationContext)) {
+        if (autoCommit != null && autoCommit && !isMaxBatchSizeHardcodedToZero(validationContext)) {
                 final String explanation = format("'%s' must be hard-coded to zero when '%s' is set to 'true'."
                                 + " Batch size equal to zero executes all statements in a single transaction"
-                                + " which allows automatic rollback to revert all statements if an error occurs",
+                                + " which allows rollback to revert all the flow file's statements together if an error occurs.",
                         MAX_BATCH_SIZE.getDisplayName(), AUTO_COMMIT.getDisplayName());
 
                 validationResults.add(new ValidationResult.Builder()
@@ -535,11 +539,6 @@ public class PutDatabaseRecord extends AbstractProcessor {
         dataRecordPath = dataRecordPathValue == null ? null : RecordPath.compile(dataRecordPathValue);
     }
 
-    @OnUnscheduled
-    public final void onUnscheduled() {
-        supportsBatchUpdates = Optional.empty();
-    }
-
     @Override
     public void onTrigger(final ProcessContext context, final ProcessSession session) throws ProcessException {
         FlowFile flowFile = session.get();
@@ -555,18 +554,18 @@ public class PutDatabaseRecord extends AbstractProcessor {
             connection = dbcpService.getConnection(flowFile.getAttributes());
 
             originalAutoCommit = connection.getAutoCommit();
-            final boolean autoCommit = context.getProperty(AUTO_COMMIT).asBoolean();
-            if (originalAutoCommit != autoCommit) {
+            final Boolean propertyAutoCommitValue = context.getProperty(AUTO_COMMIT).asBoolean();
+            if (propertyAutoCommitValue != null && originalAutoCommit != propertyAutoCommitValue) {
                 try {
-                    connection.setAutoCommit(autoCommit);
-                } catch (SQLFeatureNotSupportedException sfnse) {
-                    getLogger().debug(String.format("setAutoCommit(%s) not supported by this driver", autoCommit), sfnse);
+                    connection.setAutoCommit(propertyAutoCommitValue);
+                } catch (Exception ex) {
+                    getLogger().debug("Failed to setAutoCommit({}) due to {}", propertyAutoCommitValue, ex.getClass().getName(), ex);
                 }
             }
 
             putToDatabase(context, session, flowFile, connection);
 
-            // Only commit the connection if auto-commit is false
+            // If the connection's auto-commit setting is false, then manually commit the transaction
             if (!connection.getAutoCommit()) {
                 connection.commit();
             }
@@ -585,7 +584,7 @@ public class PutDatabaseRecord extends AbstractProcessor {
         // When an Exception is thrown, we want to route to 'retry' if we expect that attempting the same request again
         // might work. Otherwise, route to failure. SQLTransientException is a specific type that indicates that a retry may work.
         final Relationship relationship;
-        final Throwable toAnalyze = (e instanceof BatchUpdateException) ? e.getCause() : e;
+        final Throwable toAnalyze = (e instanceof BatchUpdateException || e instanceof ProcessException) ? e.getCause() : e;
         if (toAnalyze instanceof SQLTransientException) {
             relationship = REL_RETRY;
             flowFile = session.penalize(flowFile);
@@ -593,12 +592,13 @@ public class PutDatabaseRecord extends AbstractProcessor {
             relationship = REL_FAILURE;
         }
 
-        getLogger().error("Failed to put Records to database for {}. Routing to {}.", flowFile, relationship, e);
-
         final boolean rollbackOnFailure = context.getProperty(RollbackOnFailure.ROLLBACK_ON_FAILURE).asBoolean();
         if (rollbackOnFailure) {
+            getLogger().error("Failed to put Records to database for {}. Rolling back NiFi session and returning the flow file to its incoming queue.", flowFile, e);
             session.rollback();
+            context.yield();
         } else {
+            getLogger().error("Failed to put Records to database for {}. Routing to {}.", flowFile, relationship, e);
             flowFile = session.putAttribute(flowFile, PUT_DATABASE_RECORD_ERROR, (e.getMessage() == null ? "Unknown" : e.getMessage()));
             session.transfer(flowFile, relationship);
         }
@@ -611,6 +611,7 @@ public class PutDatabaseRecord extends AbstractProcessor {
             try {
                 if (!connection.getAutoCommit()) {
                     connection.rollback();
+                    getLogger().debug("Manually rolled back JDBC transaction.");
                 }
             } catch (final Exception rollbackException) {
                 getLogger().error("Failed to rollback JDBC transaction", rollbackException);
@@ -625,7 +626,7 @@ public class PutDatabaseRecord extends AbstractProcessor {
                     connection.setAutoCommit(originalAutoCommit);
                 }
             } catch (final Exception autoCommitException) {
-                getLogger().warn(String.format("Failed to set auto-commit back to %s on connection", originalAutoCommit), autoCommitException);
+                getLogger().warn("Failed to set auto-commit back to {} on connection", originalAutoCommit, autoCommitException);
             }
 
             try {
@@ -668,9 +669,10 @@ public class PutDatabaseRecord extends AbstractProcessor {
 
             final ComponentLog log = getLogger();
             final int maxBatchSize = context.getProperty(MAX_BATCH_SIZE).evaluateAttributeExpressions(flowFile).asInteger();
-            // Do not use batch if set to batch size of 1 because that is similar to not using batching.
+            // Batch Size 0 means put all sql statements into one batch update no matter how many statements there are.
+            // Do not use batch statements if batch size is equal to 1 because that is the same as not using batching.
             // Also do not use batches if the connection does not support batching.
-            boolean useBatch = maxBatchSize != 1 && isSupportBatchUpdates(connection);
+            boolean useBatch = maxBatchSize != 1 && isSupportsBatchUpdates(connection);
             int currentBatchSize = 0;
             int batchIndex = 0;
 
@@ -741,6 +743,7 @@ public class PutDatabaseRecord extends AbstractProcessor {
         final String schemaName = context.getProperty(SCHEMA_NAME).evaluateAttributeExpressions(flowFile).getValue();
         final String tableName = context.getProperty(TABLE_NAME).evaluateAttributeExpressions(flowFile).getValue();
         final String updateKeys = context.getProperty(UPDATE_KEYS).evaluateAttributeExpressions(flowFile).getValue();
+        final String deleteKeys = context.getProperty(DELETE_KEYS).evaluateAttributeExpressions(flowFile).getValue();
         final int maxBatchSize = context.getProperty(MAX_BATCH_SIZE).evaluateAttributeExpressions(flowFile).asInteger();
         final int timeoutMillis = context.getProperty(QUERY_TIMEOUT).evaluateAttributeExpressions().asTimePeriod(TimeUnit.MILLISECONDS).intValue();
 
@@ -806,7 +809,7 @@ public class PutDatabaseRecord extends AbstractProcessor {
                         } else if (UPDATE_TYPE.equalsIgnoreCase(statementType)) {
                             sqlHolder = generateUpdate(recordSchema, fqTableName, updateKeys, tableSchema, settings);
                         } else if (DELETE_TYPE.equalsIgnoreCase(statementType)) {
-                            sqlHolder = generateDelete(recordSchema, fqTableName, tableSchema, settings);
+                            sqlHolder = generateDelete(recordSchema, fqTableName, deleteKeys, tableSchema, settings);
                         } else if (UPSERT_TYPE.equalsIgnoreCase(statementType)) {
                             sqlHolder = generateUpsert(recordSchema, fqTableName, updateKeys, tableSchema, settings);
                         } else if (INSERT_IGNORE_TYPE.equalsIgnoreCase(statementType)) {
@@ -903,9 +906,7 @@ public class PutDatabaseRecord extends AbstractProcessor {
                                                 dest[j] = (Byte) src[j];
                                             }
                                             currentValue = dest;
-                                        } else if (currentValue instanceof String) {
-                                            final String stringValue = (String) currentValue;
-
+                                        } else if (currentValue instanceof String stringValue) {
                                             if (BINARY_STRING_FORMAT_BASE64.getValue().equals(binaryStringFormat)) {
                                                 currentValue = Base64.getDecoder().decode(stringValue);
                                             } else if (BINARY_STRING_FORMAT_HEXADECIMAL.getValue().equals(binaryStringFormat)) {
@@ -990,13 +991,13 @@ public class PutDatabaseRecord extends AbstractProcessor {
                 try (InputStream inputStream = new ByteArrayInputStream(byteArray)) {
                     ps.setBlob(index, inputStream);
                 } catch (SQLException e) {
-                    throw new IOException("Unable to parse binary data " + value, e.getCause());
+                    throw new IOException("Unable to parse binary data " + value, e);
                 }
             } else {
                 try (InputStream inputStream = new ByteArrayInputStream(value.toString().getBytes(StandardCharsets.UTF_8))) {
                     ps.setBlob(index, inputStream);
                 } catch (IOException | SQLException e) {
-                    throw new IOException("Unable to parse binary data " + value, e.getCause());
+                    throw new IOException("Unable to parse binary data " + value, e);
                 }
             }
         } else if (sqlType == Types.CLOB) {
@@ -1012,7 +1013,7 @@ public class PutDatabaseRecord extends AbstractProcessor {
                     clob.setString(1, value.toString());
                     ps.setClob(index, clob);
                 } catch (SQLException e) {
-                    throw new IOException("Unable to parse data as CLOB/String " + value, e.getCause());
+                    throw new IOException("Unable to parse data as CLOB/String " + value, e);
                 }
             }
         } else if (sqlType == Types.VARBINARY || sqlType == Types.LONGVARBINARY) {
@@ -1033,7 +1034,7 @@ public class PutDatabaseRecord extends AbstractProcessor {
                 try {
                     ps.setBytes(index, byteArray);
                 } catch (SQLException e) {
-                    throw new IOException("Unable to parse binary data with size" + byteArray.length, e.getCause());
+                    throw new IOException("Unable to parse binary data with size" + byteArray.length, e);
                 }
             } else {
                 byte[] byteArray = new byte[0];
@@ -1041,7 +1042,7 @@ public class PutDatabaseRecord extends AbstractProcessor {
                     byteArray = value.toString().getBytes(StandardCharsets.UTF_8);
                     ps.setBytes(index, byteArray);
                 } catch (SQLException e) {
-                    throw new IOException("Unable to parse binary data with size" + byteArray.length, e.getCause());
+                    throw new IOException("Unable to parse binary data with size" + byteArray.length, e);
                 }
             }
         } else {
@@ -1067,11 +1068,11 @@ public class PutDatabaseRecord extends AbstractProcessor {
 
     private List<Record> getDataRecords(final Record outerRecord) {
         if (dataRecordPath == null) {
-            return Collections.singletonList(outerRecord);
+            return List.of(outerRecord);
         }
 
         final RecordPathResult result = dataRecordPath.evaluate(outerRecord);
-        final List<FieldValue> fieldValues = result.getSelectedFields().collect(Collectors.toList());
+        final List<FieldValue> fieldValues = result.getSelectedFields().toList();
         if (fieldValues.isEmpty()) {
             throw new ProcessException("RecordPath " + dataRecordPath.getPath() + " evaluated against Record yielded no results.");
         }
@@ -1234,8 +1235,8 @@ public class PutDatabaseRecord extends AbstractProcessor {
                     includedColumns.add(i);
                 } else {
                     // User is ignoring unmapped fields, but log at debug level just in case
-                    getLogger().debug("Did not map field '" + fieldName + "' to any column in the database\n"
-                            + (settings.translateFieldNames ? "Normalized " : "") + "Columns: " + String.join(",", tableSchema.getColumns().keySet()));
+                    getLogger().debug("Did not map field '{}' to any column in the database\n{}Columns: {}",
+                            fieldName, (settings.translateFieldNames ? "Normalized " : ""), String.join(",", tableSchema.getColumns().keySet()));
                 }
             }
 
@@ -1287,8 +1288,8 @@ public class PutDatabaseRecord extends AbstractProcessor {
                     usedColumnIndices.add(i);
                 } else {
                     // User is ignoring unmapped fields, but log at debug level just in case
-                    getLogger().debug("Did not map field '" + fieldName + "' to any column in the database\n"
-                            + (settings.translateFieldNames ? "Normalized " : "") + "Columns: " + String.join(",", tableSchema.getColumns().keySet()));
+                    getLogger().debug("Did not map field '{}' to any column in the database\n{}Columns: {}",
+                            fieldName, (settings.translateFieldNames ? "Normalized " : ""), String.join(",", tableSchema.getColumns().keySet()));
                 }
             }
         }
@@ -1341,8 +1342,8 @@ public class PutDatabaseRecord extends AbstractProcessor {
                     usedColumnIndices.add(i);
                 } else {
                     // User is ignoring unmapped fields, but log at debug level just in case
-                    getLogger().debug("Did not map field '" + fieldName + "' to any column in the database\n"
-                            + (settings.translateFieldNames ? "Normalized " : "") + "Columns: " + String.join(",", tableSchema.getColumns().keySet()));
+                    getLogger().debug("Did not map field '{}' to any column in the database\n{}Columns: {}",
+                            fieldName, (settings.translateFieldNames ? "Normalized " : ""), String.join(",", tableSchema.getColumns().keySet()));
                 }
             }
         }
@@ -1393,8 +1394,8 @@ public class PutDatabaseRecord extends AbstractProcessor {
                                 + (settings.translateFieldNames ? "Normalized " : "") + "Columns: " + String.join(",", tableSchema.getColumns().keySet()));
                     } else {
                         // User is ignoring unmapped fields, but log at debug level just in case
-                        getLogger().debug("Did not map field '" + fieldName + "' to any column in the database\n"
-                                + (settings.translateFieldNames ? "Normalized " : "") + "Columns: " + String.join(",", tableSchema.getColumns().keySet()));
+                        getLogger().debug("Did not map field '{}' to any column in the database\nColumns: {}",
+                                fieldName, (settings.translateFieldNames ? "Normalized " : ""), String.join(",", tableSchema.getColumns().keySet()));
                         continue;
                     }
                 }
@@ -1456,7 +1457,7 @@ public class PutDatabaseRecord extends AbstractProcessor {
         return new SqlAndIncludedColumns(sqlBuilder.toString(), includedColumns);
     }
 
-    SqlAndIncludedColumns generateDelete(final RecordSchema recordSchema, final String tableName, final TableSchema tableSchema, final DMLSettings settings)
+    SqlAndIncludedColumns generateDelete(final RecordSchema recordSchema, final String tableName, String deleteKeys, final TableSchema tableSchema, final DMLSettings settings)
             throws IllegalArgumentException, MalformedRecordException, SQLDataException {
 
         final Set<String> normalizedFieldNames = getNormalizedColumnNames(recordSchema, settings.translateFieldNames);
@@ -1478,14 +1479,28 @@ public class PutDatabaseRecord extends AbstractProcessor {
         sqlBuilder.append(tableName);
 
         // iterate over all of the fields in the record, building the SQL statement by adding the column names
-        List<String> fieldNames = recordSchema.getFieldNames();
+        final List<String> fieldNames = recordSchema.getFieldNames();
         final List<Integer> includedColumns = new ArrayList<>();
         if (fieldNames != null) {
             sqlBuilder.append(" WHERE ");
             int fieldCount = fieldNames.size();
             AtomicInteger fieldsFound = new AtomicInteger(0);
 
+            // If 'deleteKeys' is not specified by the user, then all columns of the table
+            // should be used in the 'WHERE' clause, in order to keep the original behavior.
+            final Set<String> deleteKeysSet;
+            if (deleteKeys == null) {
+                deleteKeysSet = new HashSet<>(fieldNames);
+            } else {
+                deleteKeysSet = Arrays.stream(deleteKeys.split(","))
+                        .map(String::trim)
+                        .collect(Collectors.toSet());
+            }
+
             for (int i = 0; i < fieldCount; i++) {
+                if (!deleteKeysSet.contains(fieldNames.get(i))) {
+                    continue; // skip this field if it should not be included in 'WHERE'
+                }
 
                 RecordField field = recordSchema.getField(i);
                 String fieldName = field.getFieldName();
@@ -1525,8 +1540,8 @@ public class PutDatabaseRecord extends AbstractProcessor {
                     includedColumns.add(i);
                 } else {
                     // User is ignoring unmapped fields, but log at debug level just in case
-                    getLogger().debug("Did not map field '" + fieldName + "' to any column in the database\n"
-                            + (settings.translateFieldNames ? "Normalized " : "") + "Columns: " + String.join(",", tableSchema.getColumns().keySet()));
+                    getLogger().debug("Did not map field '{}' to any column in the database\n{}Columns: {}",
+                            fieldName, (settings.translateFieldNames ? "Normalized " : ""), String.join(",", tableSchema.getColumns().keySet()));
                 }
             }
 
@@ -1600,26 +1615,13 @@ public class PutDatabaseRecord extends AbstractProcessor {
         return normalizedKeyColumnNames;
     }
 
-    private Optional<Boolean> supportsBatchUpdates = Optional.empty();
-
-    private void initializeSupportBatchUpdates(Connection connection) {
-        if (!supportsBatchUpdates.isPresent()) {
-            try {
-                final DatabaseMetaData dmd = connection.getMetaData();
-                supportsBatchUpdates = Optional.of(dmd.supportsBatchUpdates());
-                getLogger().debug(String.format("Connection supportsBatchUpdates is %s",
-                        supportsBatchUpdates.orElse(Boolean.FALSE)));
-            } catch (Exception ex) {
-                supportsBatchUpdates = Optional.of(Boolean.FALSE);
-                getLogger().debug(String.format("Exception while testing if connection supportsBatchUpdates due to %s - %s",
-                        ex.getClass().getName(), ex.getMessage()));
-            }
+    private boolean isSupportsBatchUpdates(Connection connection) {
+        try {
+            return connection.getMetaData().supportsBatchUpdates();
+        } catch (Exception ex) {
+            getLogger().debug("Exception while testing if connection supportsBatchUpdates", ex);
+            return false;
         }
-    }
-
-    private boolean isSupportBatchUpdates(Connection connection) {
-        initializeSupportBatchUpdates(connection);
-        return supportsBatchUpdates.orElse(Boolean.FALSE);
     }
 
     static class SchemaKey {
@@ -1710,7 +1712,7 @@ public class PutDatabaseRecord extends AbstractProcessor {
         @Override
         public String apply(final Record record) {
             final RecordPathResult recordPathResult = recordPath.evaluate(record);
-            final List<FieldValue> resultList = recordPathResult.getSelectedFields().distinct().collect(Collectors.toList());
+            final List<FieldValue> resultList = recordPathResult.getSelectedFields().distinct().toList();
             if (resultList.isEmpty()) {
                 throw new ProcessException("Evaluated RecordPath " + recordPath.getPath() + " against Record but got no results");
             }
@@ -1719,23 +1721,16 @@ public class PutDatabaseRecord extends AbstractProcessor {
                 throw new ProcessException("Evaluated RecordPath " + recordPath.getPath() + " against Record and received multiple distinct results (" + resultList + ")");
             }
 
-            final String resultValue = String.valueOf(resultList.get(0).getValue()).toUpperCase();
-            switch (resultValue) {
-                case INSERT_TYPE:
-                case UPDATE_TYPE:
-                case DELETE_TYPE:
-                case UPSERT_TYPE:
-                    return resultValue;
-                case "C":
-                case "R":
-                    return INSERT_TYPE;
-                case "U":
-                    return UPDATE_TYPE;
-                case "D":
-                    return DELETE_TYPE;
-            }
+            final String resultValue = String.valueOf(resultList.getFirst().getValue()).toUpperCase();
 
-            throw new ProcessException("Evaluated RecordPath " + recordPath.getPath() + " against Record to determine Statement Type but found invalid value: " + resultValue);
+            return switch (resultValue) {
+                case INSERT_TYPE, UPDATE_TYPE, DELETE_TYPE, UPSERT_TYPE -> resultValue;
+                case "C", "R" -> INSERT_TYPE;
+                case "U" -> UPDATE_TYPE;
+                case "D" -> DELETE_TYPE;
+                default ->
+                        throw new ProcessException("Evaluated RecordPath " + recordPath.getPath() + " against Record to determine Statement Type but found invalid value: " + resultValue);
+            };
         }
     }
 

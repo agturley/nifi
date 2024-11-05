@@ -16,32 +16,13 @@
  */
 package org.apache.nifi.processors.standard;
 
-import static org.apache.nifi.flowfile.attributes.FragmentAttributes.FRAGMENT_COUNT;
-import static org.apache.nifi.flowfile.attributes.FragmentAttributes.FRAGMENT_ID;
-import static org.apache.nifi.flowfile.attributes.FragmentAttributes.FRAGMENT_INDEX;
-import static org.apache.nifi.flowfile.attributes.FragmentAttributes.SEGMENT_ORIGINAL_FILENAME;
-import static org.apache.nifi.flowfile.attributes.FragmentAttributes.copyAttributesToOriginal;
-
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Set;
-import java.util.TreeMap;
-import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.commons.text.StringEscapeUtils;
-import org.apache.nifi.annotation.behavior.SystemResourceConsideration;
 import org.apache.nifi.annotation.behavior.InputRequirement;
 import org.apache.nifi.annotation.behavior.InputRequirement.Requirement;
 import org.apache.nifi.annotation.behavior.SideEffectFree;
 import org.apache.nifi.annotation.behavior.SupportsBatching;
 import org.apache.nifi.annotation.behavior.SystemResource;
+import org.apache.nifi.annotation.behavior.SystemResourceConsideration;
 import org.apache.nifi.annotation.behavior.WritesAttribute;
 import org.apache.nifi.annotation.behavior.WritesAttributes;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
@@ -53,7 +34,6 @@ import org.apache.nifi.logging.ComponentLog;
 import org.apache.nifi.processor.AbstractProcessor;
 import org.apache.nifi.processor.ProcessContext;
 import org.apache.nifi.processor.ProcessSession;
-import org.apache.nifi.processor.ProcessorInitializationContext;
 import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.processors.standard.util.XmlElementNotifier;
@@ -64,6 +44,26 @@ import org.xml.sax.ContentHandler;
 import org.xml.sax.InputSource;
 import org.xml.sax.Locator;
 import org.xml.sax.SAXException;
+
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.apache.nifi.flowfile.attributes.FragmentAttributes.FRAGMENT_COUNT;
+import static org.apache.nifi.flowfile.attributes.FragmentAttributes.FRAGMENT_ID;
+import static org.apache.nifi.flowfile.attributes.FragmentAttributes.FRAGMENT_INDEX;
+import static org.apache.nifi.flowfile.attributes.FragmentAttributes.SEGMENT_ORIGINAL_FILENAME;
+import static org.apache.nifi.flowfile.attributes.FragmentAttributes.copyAttributesToOriginal;
 
 @SideEffectFree
 @SupportsBatching
@@ -94,6 +94,8 @@ public class SplitXml extends AbstractProcessor {
             .defaultValue("1")
             .build();
 
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(SPLIT_DEPTH);
+
     public static final Relationship REL_ORIGINAL = new Relationship.Builder()
             .name("original")
             .description("The original FlowFile that was split into segments. If the FlowFile fails processing, nothing will be sent to this relationship")
@@ -107,30 +109,20 @@ public class SplitXml extends AbstractProcessor {
             .description("If a FlowFile fails processing for any reason (for example, the FlowFile is not valid XML), it will be routed to this relationship")
             .build();
 
-    private List<PropertyDescriptor> properties;
-    private Set<Relationship> relationships;
-
-    @Override
-    protected void init(final ProcessorInitializationContext context) {
-        final List<PropertyDescriptor> properties = new ArrayList<>();
-        properties.add(SPLIT_DEPTH);
-        this.properties = Collections.unmodifiableList(properties);
-
-        final Set<Relationship> relationships = new HashSet<>();
-        relationships.add(REL_ORIGINAL);
-        relationships.add(REL_SPLIT);
-        relationships.add(REL_FAILURE);
-        this.relationships = Collections.unmodifiableSet(relationships);
-    }
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(
+            REL_ORIGINAL,
+            REL_SPLIT,
+            REL_FAILURE
+    );
 
     @Override
     public Set<Relationship> getRelationships() {
-        return relationships;
+        return RELATIONSHIPS;
     }
 
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        return properties;
+        return PROPERTIES;
     }
 
     @Override
@@ -146,12 +138,14 @@ public class SplitXml extends AbstractProcessor {
         final List<FlowFile> splits = new ArrayList<>();
         final String fragmentIdentifier = UUID.randomUUID().toString();
         final AtomicInteger numberOfRecords = new AtomicInteger(0);
+        final Map<String, String> attributes = new HashMap<>();
+        attributes.put(FRAGMENT_ID.key(), fragmentIdentifier);
+        attributes.put(SEGMENT_ORIGINAL_FILENAME.key(), original.getAttribute(CoreAttributes.FILENAME.key()));
         final XmlSplitterSaxParser parser = new XmlSplitterSaxParser(xmlTree -> {
             FlowFile split = session.create(original);
             split = session.write(split, out -> out.write(xmlTree.getBytes(StandardCharsets.UTF_8)));
-            split = session.putAttribute(split, FRAGMENT_ID.key(), fragmentIdentifier);
-            split = session.putAttribute(split, FRAGMENT_INDEX.key(), Integer.toString(numberOfRecords.getAndIncrement()));
-            split = session.putAttribute(split, SEGMENT_ORIGINAL_FILENAME.key(), split.getAttribute(CoreAttributes.FILENAME.key()));
+            attributes.put(FRAGMENT_INDEX.key(), Integer.toString(numberOfRecords.getAndIncrement()));
+            split = session.putAllAttributes(split, attributes);
             splits.add(split);
         }, depth);
 
@@ -330,7 +324,7 @@ public class SplitXml extends AbstractProcessor {
 
         private String prefixToNamespace(String prefix) {
             final String ns;
-            if (prefix.length() == 0) {
+            if (prefix.isEmpty()) {
                 ns = "xmlns";
             } else {
                 ns = "xmlns:" + prefix;

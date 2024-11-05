@@ -1,0 +1,310 @@
+/*!
+ *  Licensed to the Apache Software Foundation (ASF) under one or more
+ *  contributor license agreements.  See the NOTICE file distributed with
+ *  this work for additional information regarding copyright ownership.
+ *  The ASF licenses this file to You under the Apache License, Version 2.0
+ *  (the "License"); you may not use this file except in compliance with
+ *  the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
+
+@use 'sass:map';
+@use '@angular/material' as mat;
+
+@layer base {
+    //fonts are loaded by the browser
+    @font-face {
+        font-family: Comic Sans MS;
+    }
+}
+
+$primary: (
+    0: #000000,
+    10: #311b92,
+    20: #4527a0,
+    25: #512da8,
+    30: #5e35b1,
+    35: #673ab7,
+    40: #7e57c2,
+    50: #9575cd,
+    60: #b39ddb,
+    70: #d1c4e9,
+    80: #ede7f6,
+    90: #ede7f6,
+    95: #ede7f6,
+    98: #ede7f6,
+    99: #ede7f6,
+    100: #ffffff
+);
+
+$secondary: (
+    0: #000000,
+    10: #311b92,
+    20: #4527a0,
+    25: #512da8,
+    30: #5e35b1,
+    35: #673ab7,
+    40: #7e57c2,
+    50: #9575cd,
+    60: #b39ddb,
+    70: #d1c4e9,
+    80: #ede7f6,
+    90: #ede7f6,
+    95: #ede7f6,
+    98: #ede7f6,
+    99: #ede7f6,
+    100: #ffffff
+);
+
+$tertiary: (
+    0: #000000,
+    10: #004d40,
+    20: #00695c,
+    25: #00796b,
+    30: #00897b,
+    35: #009688,
+    40: #26a69a,
+    50: #4db6ac,
+    60: #80cbc4,
+    70: #b2dfdb,
+    80: #e0f2f1,
+    90: #e0f2f1,
+    95: #e0f2f1,
+    98: #e0f2f1,
+    99: #e0f2f1,
+    100: #ffffff
+);
+
+$error: (
+    0: #000000,
+    10: #000000,
+    20: #000000,
+    25: #a8372a,
+    30: #ba554a,
+    35: #ba554a,
+    40: #ba554a,
+    50: #eb7071,
+    60: #eb7071,
+    70: #eb7071,
+    80: #eb7071,
+    90: #f49999,
+    95: #f49999,
+    98: #ffccd2,
+    99: #ffccd2,
+    100: #ffffff
+);
+
+$neutral: (
+    0: #000000,
+    4: #121212,
+    6: #303030,
+    10: #303030,
+    12: #303030,
+    17: #303030,
+    20: #444444,
+    22: #444444,
+    24: #444444,
+    25: #666666,
+    30: #666666,
+    35: #666666,
+    40: #82878d,
+    50: #82878d,
+    60: #82878d,
+    70: #d8d8d8,
+    80: #d8d8d8,
+    87: #d8d8d8,
+    90: #e3e3e3,
+    92: #e3e3e3,
+    94: #f4f4f4,
+    95: #f4f4f4,
+    96: #f4f4f4,
+    98: #fafafa,
+    99: #fafafa,
+    100: #ffffff
+);
+
+$neutral-variant: (
+    0: #000000,
+    10: #666666,
+    20: #666666,
+    25: #666666,
+    30: #666666,
+    35: #666666,
+    40: #acacac,
+    50: #d8d8d8,
+    60: #d8d8d8,
+    70: #d8d8d8,
+    80: #d8d8d8,
+    90: #e3e3e3,
+    95: #f4f4f4,
+    98: #fafafa,
+    99: #fafafa,
+    100: #ffffff
+);
+
+$m3-material-primary-light-palette: (
+    primary: $primary,
+    secondary: $secondary,
+    tertiary: $tertiary,
+    neutral: $neutral,
+    neutral-variant: $neutral-variant,
+    error: $error
+);
+
+$m3-material-primary-dark-palette: (
+    primary: $primary,
+    secondary: $secondary,
+    tertiary: $tertiary,
+    neutral: $neutral,
+    neutral-variant: $neutral-variant,
+    error: $error
+);
+
+// Define a dark theme
+$_dark-theme-rest: (
+    secondary: map.get($m3-material-primary-dark-palette, secondary),
+    neutral: map.get($m3-material-primary-dark-palette, neutral),
+    neutral-variant: map.get($m3-material-primary-dark-palette, neutral-variant),
+    error: map.get($m3-material-primary-dark-palette, error)
+);
+$_dark-theme-primary: map.merge(map.get($m3-material-primary-dark-palette, primary), $_dark-theme-rest);
+$_dark-theme-tertiary: map.merge(map.get($m3-material-primary-dark-palette, tertiary), $_dark-theme-rest);
+
+$m3-dark-theme: mat.define-theme(
+    (
+        color: (
+            theme-type: dark,
+            primary: $_dark-theme-primary,
+            tertiary: $_dark-theme-tertiary
+        ),
+        typography: (
+            plain-family: Comic Sans MS,
+            brand-family: Comic Sans MS,
+            bold-weight: 700,
+            regular-weight: 400
+        ),
+        density: (
+            scale: -3
+        )
+    )
+);
+
+// Define a light theme
+$_light-theme-rest: (
+    secondary: map.get($m3-material-primary-light-palette, secondary),
+    neutral: map.get($m3-material-primary-light-palette, neutral),
+    neutral-variant: map.get($m3-material-primary-light-palette, neutral-variant),
+    error: map.get($m3-material-primary-light-palette, error)
+);
+$_light-theme-primary: map.merge(map.get($m3-material-primary-light-palette, primary), $_light-theme-rest);
+$_light-theme-tertiary: map.merge(map.get($m3-material-primary-light-palette, tertiary), $_light-theme-rest);
+
+$m3-light-theme: mat.define-theme(
+    (
+        color: (
+            theme-type: light,
+            primary: $_light-theme-primary,
+            tertiary: $_light-theme-tertiary
+        ),
+        typography: (
+            plain-family: Comic Sans MS,
+            brand-family: Comic Sans MS,
+            bold-weight: 700,
+            regular-weight: 400
+        ),
+        density: (
+            scale: -3
+        )
+    )
+);
+
+$m3-light-theme-config: (
+    primary: (
+        default: 40,
+        contrast: #ffffff
+    ),
+    secondary: (
+        default: 50,
+        contrast: #ffffff,
+        opacity: 0.6,
+        new-canvas-item: (
+            grip: #ffffff,
+            hover: #000000
+        )
+    ),
+    tertiary: (
+        default: 40,
+        variant: 90
+    ),
+    success: (
+        default: #31975b,
+        variant: #1390ca
+    ),
+    alternate-surface: #ffffff,
+    caution: (
+        default: #cf9338,
+        contrast: #ffffff
+    ),
+    neutral: (
+        darker: 4,
+        default: 35,
+        lighter: 99,
+        disabled: 80,
+        contrast: #000000
+    ),
+    neutral-variant: 50,
+    error: (
+        variant: 50,
+        default: 40,
+        contrast: #ffffff
+    )
+);
+
+$m3-dark-theme-config: (
+    primary: (
+        default: 40,
+        contrast: #000000
+    ),
+    secondary: (
+        default: 40,
+        contrast: #ffffff,
+        opacity: 0.5,
+        new-canvas-item: (
+            grip: #000000,
+            hover: #000000
+        )
+    ),
+    tertiary: (
+        variant: 10,
+        default: 70
+    ),
+    success: (
+        default: #31975b,
+        variant: #1390ca
+    ),
+    alternate-surface: #444444,
+    caution: (
+        default: #cf9338,
+        contrast: #ffffff
+    ),
+    neutral: (
+        darker: 10,
+        default: 40,
+        lighter: 96,
+        disabled: 90,
+        contrast: #ffffff
+    ),
+    neutral-variant: 35,
+    error: (
+        variant: 90,
+        default: 50,
+        contrast: #ffffff
+    )
+);

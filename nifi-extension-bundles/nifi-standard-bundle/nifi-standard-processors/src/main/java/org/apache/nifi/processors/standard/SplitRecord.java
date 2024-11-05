@@ -54,7 +54,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -100,6 +99,12 @@ public class SplitRecord extends AbstractProcessor {
         .required(true)
         .build();
 
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(
+            RECORD_READER,
+            RECORD_WRITER,
+            RECORDS_PER_SPLIT
+    );
+
     static final Relationship REL_SPLITS = new Relationship.Builder()
         .name("splits")
         .description("The individual 'segments' of the original FlowFile will be routed to this relationship.")
@@ -114,22 +119,20 @@ public class SplitRecord extends AbstractProcessor {
             + "the unchanged FlowFile will be routed to this relationship.")
         .build();
 
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(
+            REL_SPLITS,
+            REL_ORIGINAL,
+            REL_FAILURE
+    );
+
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        final List<PropertyDescriptor> properties = new ArrayList<>();
-        properties.add(RECORD_READER);
-        properties.add(RECORD_WRITER);
-        properties.add(RECORDS_PER_SPLIT);
-        return properties;
+        return PROPERTIES;
     }
 
     @Override
     public Set<Relationship> getRelationships() {
-        final Set<Relationship> relationships = new HashSet<>();
-        relationships.add(REL_SPLITS);
-        relationships.add(REL_ORIGINAL);
-        relationships.add(REL_FAILURE);
-        return relationships;
+        return RELATIONSHIPS;
     }
 
     @Override
@@ -198,7 +201,7 @@ public class SplitRecord extends AbstractProcessor {
                 }
             });
         } catch (final ProcessException pe) {
-            getLogger().error("Failed to split {}", new Object[] {original, pe});
+            getLogger().error("Failed to split {}", original, pe);
             session.remove(splits);
             session.transfer(original, REL_FAILURE);
             return;
@@ -211,7 +214,7 @@ public class SplitRecord extends AbstractProcessor {
             session.putAttribute(split, FRAGMENT_COUNT, String.valueOf(splits.size()));
         }
         session.transfer(splits, REL_SPLITS);
-        getLogger().info("Successfully split {} into {} FlowFiles, each containing up to {} records", new Object[] {original, splits.size(), maxRecords});
+        getLogger().info("Successfully split {} into {} FlowFiles, each containing up to {} records", original, splits.size(), maxRecords);
     }
 
 }

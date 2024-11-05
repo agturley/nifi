@@ -21,8 +21,10 @@ import org.apache.nifi.serialization.record.util.IllegalTypeConversionException;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.time.temporal.TemporalAccessor;
 import java.util.Date;
 import java.util.Optional;
 
@@ -43,43 +45,65 @@ class ObjectLocalDateTimeFieldConverter implements FieldConverter<Object, LocalD
      */
     @Override
     public LocalDateTime convertField(final Object field, final Optional<String> pattern, final String name) {
-        if (field == null) {
-            return null;
-        }
-        if (field instanceof LocalDateTime) {
-            return (LocalDateTime) field;
-        }
-        if (field instanceof Date date) {
-            final Instant instant = Instant.ofEpochMilli(date.getTime());
-            return ofInstant(instant);
-        }
-        if (field instanceof final Number number) {
-            // If value is a floating point number, we consider it as seconds since epoch plus a decimal part for fractions of a second.
-            if (field instanceof Double || field instanceof Float) {
-                return toLocalDateTime(number.doubleValue());
-            }
-
-            return toLocalDateTime(number.longValue());
-        }
-        if (field instanceof String) {
-            final String string = field.toString().trim();
-            if (string.isEmpty()) {
+        switch (field) {
+            case null -> {
                 return null;
             }
+            case LocalDateTime localDateTime -> {
+                return localDateTime;
+            }
+            case Date date -> {
+                final Instant instant = Instant.ofEpochMilli(date.getTime());
+                return ofInstant(instant);
+            }
+            case final Number number -> {
+                // If value is a floating point number, we consider it as seconds since epoch plus a decimal part for fractions of a second.
+                if (field instanceof Double || field instanceof Float) {
+                    return toLocalDateTime(number.doubleValue());
+                }
 
-            if (pattern.isPresent()) {
-                final DateTimeFormatter formatter = DateTimeFormatterRegistry.getDateTimeFormatter(pattern.get());
-                try {
-                    return LocalDateTime.parse(string, formatter);
-                } catch (final DateTimeParseException e) {
+                return toLocalDateTime(number.longValue());
+            }
+            case String ignored -> {
+                final String string = field.toString().trim();
+                if (string.isEmpty()) {
+                    return null;
+                }
+
+                if (pattern.isPresent()) {
+                    final DateTimeFormatter formatter = DateTimeFormatterRegistry.getDateTimeFormatter(pattern.get());
+                    try {
+                        return parseLocalDateTime(field, name, string, formatter);
+                    } catch (final DateTimeParseException e) {
+                        return tryParseAsNumber(string, name);
+                    }
+                } else {
                     return tryParseAsNumber(string, name);
                 }
-            } else {
-                return tryParseAsNumber(string, name);
+            }
+            default -> {
             }
         }
 
         throw new FieldConversionException(LocalDateTime.class, field, name);
+    }
+
+    private LocalDateTime parseLocalDateTime(final Object field, final String name, final String string, final DateTimeFormatter formatter) {
+        final LocalDateTime parsed;
+
+        // Attempt ZonedDateTime parsing before LocalDateTime to handle zone offsets
+        final TemporalAccessor resolved = formatter.parseBest(string, ZonedDateTime::from, LocalDateTime::from);
+        if (resolved instanceof ZonedDateTime zonedDateTime) {
+            // Convert Instant to LocalDateTime using system default zone offset to incorporate adjusted hours and minutes
+            final Instant instant = zonedDateTime.toInstant();
+            parsed = ofInstant(instant);
+        } else if (resolved instanceof LocalDateTime localDateTime) {
+            parsed = localDateTime;
+        } else {
+            throw new FieldConversionException(LocalDateTime.class, field, name);
+        }
+
+        return parsed;
     }
 
     private LocalDateTime tryParseAsNumber(final String value, final String fieldName) {
@@ -121,9 +145,8 @@ class ObjectLocalDateTimeFieldConverter implements FieldConverter<Object, LocalD
         }
 
         final Instant instant = Instant.ofEpochMilli(value);
-        final LocalDateTime localDateTime = ofInstant(instant);
 
-        return localDateTime;
+        return ofInstant(instant);
     }
 
     private LocalDateTime ofInstant(final Instant instant) {

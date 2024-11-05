@@ -18,6 +18,7 @@
 package org.apache.nifi.registry.flow.mapping;
 
 import org.apache.commons.lang3.ClassUtils;
+import org.apache.nifi.asset.Asset;
 import org.apache.nifi.bundle.BundleCoordinate;
 import org.apache.nifi.components.PropertyDescriptor;
 import org.apache.nifi.components.resource.ResourceCardinality;
@@ -50,6 +51,7 @@ import org.apache.nifi.flow.ExternalControllerServiceReference;
 import org.apache.nifi.flow.ParameterProviderReference;
 import org.apache.nifi.flow.PortType;
 import org.apache.nifi.flow.Position;
+import org.apache.nifi.flow.VersionedAsset;
 import org.apache.nifi.flow.VersionedConnection;
 import org.apache.nifi.flow.VersionedControllerService;
 import org.apache.nifi.flow.VersionedFlowAnalysisRule;
@@ -73,12 +75,15 @@ import org.apache.nifi.flow.VersionedResourceType;
 import org.apache.nifi.groups.ProcessGroup;
 import org.apache.nifi.groups.RemoteProcessGroup;
 import org.apache.nifi.nar.ExtensionManager;
+import org.apache.nifi.parameter.FilterSensitiveParameterValueMapper;
 import org.apache.nifi.parameter.Parameter;
 import org.apache.nifi.parameter.ParameterContext;
 import org.apache.nifi.parameter.ParameterDescriptor;
 import org.apache.nifi.parameter.ParameterProvider;
 import org.apache.nifi.parameter.ParameterProviderConfiguration;
 import org.apache.nifi.parameter.ParameterReferencedControllerServiceData;
+import org.apache.nifi.parameter.ParameterValueMapper;
+import org.apache.nifi.parameter.StandardParameterValueMapper;
 import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.registry.flow.FlowRegistryClientNode;
 import org.apache.nifi.registry.flow.VersionControlInformation;
@@ -107,6 +112,7 @@ public class NiFiRegistryFlowMapper {
 
     private final ExtensionManager extensionManager;
     private final FlowMappingOptions flowMappingOptions;
+    private final ParameterValueMapper parameterValueMapper;
 
     // We need to keep a mapping of component id to versionedComponentId as we transform these objects. This way, when
     // we call #mapConnectable, instead of generating a new UUID for the ConnectableComponent, we can lookup the 'versioned'
@@ -121,6 +127,12 @@ public class NiFiRegistryFlowMapper {
     public NiFiRegistryFlowMapper(final ExtensionManager extensionManager, final FlowMappingOptions flowMappingOptions) {
         this.extensionManager = extensionManager;
         this.flowMappingOptions = flowMappingOptions;
+
+        if (flowMappingOptions.isMapSensitiveConfiguration()) {
+            this.parameterValueMapper = new StandardParameterValueMapper(flowMappingOptions.getSensitiveValueEncryptor());
+        } else {
+            this.parameterValueMapper = new FilterSensitiveParameterValueMapper();
+        }
     }
 
     /**
@@ -911,10 +923,10 @@ public class NiFiRegistryFlowMapper {
             if (referencedControllerServiceData.isEmpty()) {
                 versionedParameter = mapParameter(parameter);
             } else {
-                versionedParameter = mapParameter(
-                    parameter,
-                    getId(Optional.ofNullable(referencedControllerServiceData.get(0).getVersionedServiceId()), parameter.getValue())
-                );
+                final String referencedVersionServiceId = referencedControllerServiceData.getFirst().getVersionedServiceId();
+                final String parameterValue = parameter.getValue();
+                final String serviceId = getId(Optional.ofNullable(referencedVersionServiceId), parameterValue);
+                versionedParameter = mapParameter(parameter, serviceId);
             }
         } else {
             versionedParameter = mapParameter(parameter);
@@ -954,20 +966,24 @@ public class NiFiRegistryFlowMapper {
         versionedParameter.setSensitive(descriptor.isSensitive());
         versionedParameter.setProvided(parameter.isProvided());
 
-        final boolean mapParameterValue = flowMappingOptions.isMapSensitiveConfiguration() || !descriptor.isSensitive();
-        final String parameterValue;
-        if (mapParameterValue) {
-            if (descriptor.isSensitive()) {
-                parameterValue = encrypt(value);
-            } else {
-                parameterValue = value;
-            }
-        } else {
-            parameterValue = null;
+        final List<Asset> referencedAssets = parameter.getReferencedAssets();
+        if (referencedAssets == null || referencedAssets.isEmpty()) {
+            final String mapped = parameterValueMapper.getMapped(parameter, value);
+            versionedParameter.setValue(mapped);
+        } else if (flowMappingOptions.isMapAssetReferences()) {
+            final List<VersionedAsset> assetIds = referencedAssets.stream()
+                    .map(this::createVersionedAsset)
+                    .toList();
+            versionedParameter.setReferencedAssets(assetIds);
         }
-
-        versionedParameter.setValue(parameterValue);
         return versionedParameter;
+    }
+
+    private VersionedAsset createVersionedAsset(final Asset asset) {
+        final VersionedAsset versionedAsset = new VersionedAsset();
+        versionedAsset.setIdentifier(asset.getIdentifier());
+        versionedAsset.setName(asset.getName());
+        return versionedAsset;
     }
 
     private org.apache.nifi.flow.ScheduledState mapScheduledState(final ScheduledState scheduledState) {

@@ -38,7 +38,7 @@ import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.processors.aws.credentials.provider.service.AWSCredentialsProviderService;
 import org.apache.nifi.proxy.ProxyConfiguration;
-import org.apache.nifi.proxy.ProxyConfigurationService;
+import org.apache.nifi.proxy.ProxySpec;
 import org.apache.nifi.ssl.SSLContextService;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.awscore.client.builder.AwsClientBuilder;
@@ -48,6 +48,7 @@ import software.amazon.awssdk.core.client.config.SdkAdvancedClientOption;
 import software.amazon.awssdk.core.retry.RetryPolicy;
 import software.amazon.awssdk.http.FileStoreTlsKeyManagersProvider;
 import software.amazon.awssdk.http.TlsKeyManagersProvider;
+import software.amazon.awssdk.http.TlsTrustManagersProvider;
 import software.amazon.awssdk.regions.Region;
 
 import javax.net.ssl.TrustManager;
@@ -138,13 +139,7 @@ public abstract class AbstractAwsProcessor<T extends SdkClient> extends Abstract
         .identifiesControllerService(AWSCredentialsProviderService.class)
         .build();
 
-    public static final PropertyDescriptor PROXY_CONFIGURATION_SERVICE = new PropertyDescriptor.Builder()
-        .name("proxy-configuration-service")
-        .displayName("Proxy Configuration Service")
-        .description("Specifies the Proxy Configuration Controller Service to proxy network requests.")
-        .identifiesControllerService(ProxyConfigurationService.class)
-        .required(false)
-        .build();
+    public static final PropertyDescriptor PROXY_CONFIGURATION_SERVICE = ProxyConfiguration.createProxyConfigPropertyDescriptor(ProxySpec.HTTP, ProxySpec.HTTP_AUTH);
 
 
     protected static final String DEFAULT_USER_AGENT = "NiFi";
@@ -290,20 +285,20 @@ public abstract class AbstractAwsProcessor<T extends SdkClient> extends Abstract
         if (this.getSupportedPropertyDescriptors().contains(SSL_CONTEXT_SERVICE)) {
             final SSLContextService sslContextService = context.getProperty(SSL_CONTEXT_SERVICE).asControllerService(SSLContextService.class);
             if (sslContextService != null) {
-                final TrustManager[] trustManagers = new TrustManager[] {sslContextService.createTrustManager()};
-                final TlsKeyManagersProvider keyManagersProvider = FileStoreTlsKeyManagersProvider
-                        .create(Path.of(sslContextService.getKeyStoreFile()), sslContextService.getKeyStoreType(), sslContextService.getKeyStorePassword());
-                httpClientConfigurer.configureTls(trustManagers, keyManagersProvider);
+                TlsTrustManagersProvider trustManagersProvider = null;
+                TlsKeyManagersProvider keyManagersProvider = null;
+                if (sslContextService.isTrustStoreConfigured()) {
+                    trustManagersProvider = () -> new TrustManager[]{sslContextService.createTrustManager()};
+                }
+                if (sslContextService.isKeyStoreConfigured()) {
+                    keyManagersProvider = FileStoreTlsKeyManagersProvider
+                            .create(Path.of(sslContextService.getKeyStoreFile()), sslContextService.getKeyStoreType(), sslContextService.getKeyStorePassword());
+                }
+                httpClientConfigurer.configureTls(trustManagersProvider, keyManagersProvider);
             }
         }
 
-        final ProxyConfiguration proxyConfig = ProxyConfiguration.getConfiguration(context, () -> {
-            if (context.getProperty(ProxyConfigurationService.PROXY_CONFIGURATION_SERVICE).isSet()) {
-                final ProxyConfigurationService configurationService = context.getProperty(ProxyConfigurationService.PROXY_CONFIGURATION_SERVICE).asControllerService(ProxyConfigurationService.class);
-                return configurationService.getConfiguration();
-            }
-            return ProxyConfiguration.DIRECT_CONFIGURATION;
-        });
+        final ProxyConfiguration proxyConfig = ProxyConfiguration.getConfiguration(context);
 
         if (Proxy.Type.HTTP.equals(proxyConfig.getProxyType())) {
             httpClientConfigurer.configureProxy(proxyConfig);

@@ -30,7 +30,6 @@ import org.apache.nifi.expression.ExpressionLanguageScope;
 import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.processors.aws.credentials.provider.service.AWSCredentialsProviderService;
 import org.apache.nifi.proxy.ProxyConfiguration;
-import org.apache.nifi.proxy.ProxyConfigurationService;
 import org.apache.nifi.proxy.ProxySpec;
 import org.apache.nifi.schema.access.SchemaField;
 import org.apache.nifi.schema.access.SchemaNotFoundException;
@@ -135,7 +134,7 @@ public class AmazonGlueSchemaRegistry extends AbstractControllerService implemen
 
     private static final ProxySpec[] PROXY_SPECS = {ProxySpec.HTTP_AUTH};
 
-    private static final PropertyDescriptor PROXY_CONFIGURATION_SERVICE = ProxyConfiguration.createProxyConfigPropertyDescriptor(true, PROXY_SPECS);
+    private static final PropertyDescriptor PROXY_CONFIGURATION_SERVICE = ProxyConfiguration.createProxyConfigPropertyDescriptor(PROXY_SPECS);
 
     private static final List<PropertyDescriptor> PROPERTIES = new ArrayList<>(Arrays.asList(
             SCHEMA_REGISTRY_NAME,
@@ -221,24 +220,22 @@ public class AmazonGlueSchemaRegistry extends AbstractControllerService implemen
         if (this.getSupportedPropertyDescriptors().contains(SSL_CONTEXT_SERVICE)) {
             final SSLContextService sslContextService = context.getProperty(SSL_CONTEXT_SERVICE).asControllerService(SSLContextService.class);
             if (sslContextService != null) {
-                final TrustManager[] trustManagers = new TrustManager[]{sslContextService.createTrustManager()};
-                final TlsKeyManagersProvider keyManagersProvider = FileStoreTlsKeyManagersProvider
-                        .create(Paths.get(sslContextService.getKeyStoreFile()), sslContextService.getKeyStoreType(), sslContextService.getKeyStorePassword());
-                builder.tlsTrustManagersProvider(() -> trustManagers);
-                builder.tlsKeyManagersProvider(keyManagersProvider);
+                if (sslContextService.isTrustStoreConfigured()) {
+                    final TrustManager[] trustManagers = new TrustManager[]{sslContextService.createTrustManager()};
+                    builder.tlsTrustManagersProvider(() -> trustManagers);
+                }
+                if (sslContextService.isKeyStoreConfigured()) {
+                    final TlsKeyManagersProvider keyManagersProvider = FileStoreTlsKeyManagersProvider
+                            .create(Paths.get(sslContextService.getKeyStoreFile()), sslContextService.getKeyStoreType(), sslContextService.getKeyStorePassword());
+                    builder.tlsKeyManagersProvider(keyManagersProvider);
+                }
             }
         }
-        final ProxyConfiguration proxyConfig = ProxyConfiguration.getConfiguration(context, () -> {
-            if (context.getProperty(ProxyConfigurationService.PROXY_CONFIGURATION_SERVICE).isSet()) {
-                final ProxyConfigurationService configurationService = context.getProperty(ProxyConfigurationService.PROXY_CONFIGURATION_SERVICE).asControllerService(ProxyConfigurationService.class);
-                return configurationService.getConfiguration();
-            }
-            return ProxyConfiguration.DIRECT_CONFIGURATION;
-        });
+        final ProxyConfiguration proxyConfig = ProxyConfiguration.getConfiguration(context);
 
         if (Proxy.Type.HTTP.equals(proxyConfig.getProxyType())) {
             final software.amazon.awssdk.http.apache.ProxyConfiguration.Builder proxyConfigBuilder = software.amazon.awssdk.http.apache.ProxyConfiguration.builder()
-                    .endpoint(URI.create(String.format("%s:%s", proxyConfig.getProxyServerHost(), proxyConfig.getProxyServerPort())));
+                    .endpoint(URI.create(String.format("http://%s:%s", proxyConfig.getProxyServerHost(), proxyConfig.getProxyServerPort())));
 
             if (proxyConfig.hasCredential()) {
                 proxyConfigBuilder.username(proxyConfig.getProxyUserName());

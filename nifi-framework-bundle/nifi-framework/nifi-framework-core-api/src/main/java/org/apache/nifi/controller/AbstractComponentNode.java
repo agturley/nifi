@@ -208,7 +208,7 @@ public abstract class AbstractComponentNode implements ComponentNode {
      *         configured set of properties
      */
     protected boolean isClasspathDifferent(final Map<PropertyDescriptor, String> properties) {
-        // If any property in the given map modifies classpath and is different than the currently configured value,
+        // If any property in the given map modifies classpath and is different from the currently configured value,
         // the given properties will require a different classpath.
         for (final Map.Entry<PropertyDescriptor, String> entry : properties.entrySet()) {
             final PropertyDescriptor descriptor = entry.getKey();
@@ -261,18 +261,17 @@ public abstract class AbstractComponentNode implements ComponentNode {
      *
      * @param properties Property Names and Values to be updated
      * @param allowRemovalOfRequiredProperties Allow Removal of Required Properties
-     * @param updatedSensitiveDynamicPropertyNames Requested Sensitive Dynamic Property Names replaces current configuration
+     * @param requestedSensitiveDynamicPropertyNames Requested Sensitive Dynamic Property Names adds to current configuration
      */
     @Override
-    public void setProperties(final Map<String, String> properties, final boolean allowRemovalOfRequiredProperties, final Set<String> updatedSensitiveDynamicPropertyNames) {
+    public void setProperties(final Map<String, String> properties, final boolean allowRemovalOfRequiredProperties, final Set<String> requestedSensitiveDynamicPropertyNames) {
         if (properties == null) {
             return;
         }
 
         lock.lock();
         try {
-            Objects.requireNonNull(updatedSensitiveDynamicPropertyNames, "Sensitive Dynamic Property Names required");
-            sensitiveDynamicPropertyNames.getAndSet(updatedSensitiveDynamicPropertyNames);
+            Objects.requireNonNull(requestedSensitiveDynamicPropertyNames, "Sensitive Dynamic Property Names required");
 
             verifyCanUpdateProperties(properties);
 
@@ -282,6 +281,8 @@ public abstract class AbstractComponentNode implements ComponentNode {
             final PropertyConfigurationMapper configurationMapper = new PropertyConfigurationMapper();
             final Map<String, PropertyConfiguration> configurationMap = configurationMapper.mapRawPropertyValuesToPropertyConfiguration(this, properties);
 
+            final Set<String> removedPropertyNames = new LinkedHashSet<>();
+
             try (final NarCloseable narCloseable = NarCloseable.withComponentNarLoader(extensionManager, getComponent().getClass(), id)) {
                 boolean classpathChanged = false;
                 for (final Map.Entry<String, String> entry : properties.entrySet()) {
@@ -289,7 +290,7 @@ public abstract class AbstractComponentNode implements ComponentNode {
 
                     // Set sensitive status on dynamic properties after getting canonical representation of Property Descriptor
                     final PropertyDescriptor componentDescriptor = getComponent().getPropertyDescriptor(propertyName);
-                    final PropertyDescriptor descriptor = componentDescriptor.isDynamic() && updatedSensitiveDynamicPropertyNames.contains(propertyName)
+                    final PropertyDescriptor descriptor = componentDescriptor.isDynamic() && requestedSensitiveDynamicPropertyNames.contains(propertyName)
                             ? new PropertyDescriptor.Builder().fromPropertyDescriptor(componentDescriptor).sensitive(true).build()
                             : componentDescriptor;
 
@@ -306,9 +307,12 @@ public abstract class AbstractComponentNode implements ComponentNode {
                     }
 
                     if (propertyName != null && entry.getValue() == null) {
-                        removeProperty(propertyName, allowRemovalOfRequiredProperties);
+                        final boolean removed = removeProperty(propertyName, allowRemovalOfRequiredProperties);
+                        if (removed) {
+                            removedPropertyNames.add(propertyName);
+                        }
                     } else if (propertyName != null) {
-                        // Use the EL-Agnostic Parameter Parser to gather the list of referenced Parameters. We do this because we want to to keep track of which parameters
+                        // Use the EL-Agnostic Parameter Parser to gather the list of referenced Parameters. We do this because we want to keep track of which parameters
                         // are referenced, regardless of whether or not they are referenced from within an EL Expression. However, we also will need to derive a different ParameterTokenList
                         // that we can provide to the PropertyConfiguration, so that when compiling the Expression Language Expressions, we are able to keep the Parameter Reference within
                         // the Expression's text.
@@ -323,19 +327,26 @@ public abstract class AbstractComponentNode implements ComponentNode {
                     }
                 }
 
+                // Update Sensitive Dynamic Property Names
+                final Set<String> updatedSensitiveDynamicPropertyNames = new LinkedHashSet<>(sensitiveDynamicPropertyNames.get());
+                updatedSensitiveDynamicPropertyNames.addAll(requestedSensitiveDynamicPropertyNames);
+                // Remove Sensitive Dynamic Property Names for removed properties
+                updatedSensitiveDynamicPropertyNames.removeAll(removedPropertyNames);
+                sensitiveDynamicPropertyNames.getAndSet(updatedSensitiveDynamicPropertyNames);
+
                 // Determine the updated Classloader Isolation Key, if applicable.
                 final String updatedIsolationKey = determineClasloaderIsolationKey();
                 final boolean classloaderIsolationKeyChanged = !Objects.equals(initialIsolationKey, updatedIsolationKey);
 
                 // if at least one property with dynamicallyModifiesClasspath(true) was set, then reload the component with the new urls
                 if (classpathChanged || classloaderIsolationKeyChanged) {
-                    logger.info("Updating classpath for " + this.componentType + " with the ID " + this.getIdentifier());
+                    logger.info("Updating classpath for {} with the ID {}", this.componentType, this.getIdentifier());
 
                     final Set<URL> additionalUrls = getAdditionalClasspathResources(getComponent().getPropertyDescriptors());
                     try {
                         reload(additionalUrls);
                     } catch (Exception e) {
-                        getLogger().error("Error reloading component with id " + id + ": " + e.getMessage(), e);
+                        getLogger().error("Error reloading component with id {}", id, e);
                     }
                 }
             }
@@ -657,18 +668,6 @@ public abstract class AbstractComponentNode implements ComponentNode {
         return getPropertyValues((descriptor, config) -> getConfigValue(config, isResolveParameter(descriptor, config)));
     }
 
-    /**
-     * Converts from a Map of PropertyDescriptor to value, to a Map of property name to value
-     *
-     * @param propertyValues the property values to convert
-     * @return a Map whose keys are the names of the properties instead of descriptors
-     */
-    public Map<String, String> toPropertyNameMap(final Map<PropertyDescriptor, String> propertyValues) {
-        final Map<String, String> converted = new HashMap<>();
-        propertyValues.forEach((key, value) -> converted.put(key.getName(), value));
-        return converted;
-    }
-
     private Map<PropertyDescriptor, String> getPropertyValues(final BiFunction<PropertyDescriptor, PropertyConfiguration, String> valueFunction) {
         try (final NarCloseable narCloseable = NarCloseable.withComponentNarLoader(extensionManager, getComponent().getClass(), getIdentifier())) {
             final List<PropertyDescriptor> supported = getComponent().getPropertyDescriptors();
@@ -785,11 +784,12 @@ public abstract class AbstractComponentNode implements ComponentNode {
 
         final boolean dynamicallyModifiesClasspath = descriptors.stream()
                 .anyMatch(PropertyDescriptor::isDynamicClasspathModifier);
+        final String isolationKey = determineClasloaderIsolationKey();
 
-        if (dynamicallyModifiesClasspath) {
+        if (dynamicallyModifiesClasspath || isolationKey != null) {
             final Set<URL> additionalUrls = this.getAdditionalClasspathResources(descriptors, this::getEffectivePropertyValueWithDefault);
 
-            final String newFingerprint = ClassLoaderUtils.generateAdditionalUrlsFingerprint(additionalUrls, determineClasloaderIsolationKey());
+            final String newFingerprint = ClassLoaderUtils.generateAdditionalUrlsFingerprint(additionalUrls, isolationKey);
             if (!StringUtils.equals(additionalResourcesFingerprint, newFingerprint)) {
                 setAdditionalResourcesFingerprint(newFingerprint);
                 try {
@@ -936,17 +936,17 @@ public abstract class AbstractComponentNode implements ComponentNode {
 
             return validationResults;
         } catch (final ControllerServiceDisabledException e) {
-            getLogger().debug("Failed to perform validation due to " + e, e);
+            getLogger().debug("Failed to perform validation", e);
             return Collections.singleton(
                 new DisabledServiceValidationResult("Component", e.getControllerServiceId(), "performing validation depends on referencing a Controller Service that is currently disabled"));
         } catch (final Exception e) {
             // We don't want to log this as an error because we will return a ValidationResult that is
             // invalid. However, we do want to make the stack trace available if needed, so we log it at
             // a debug level.
-            getLogger().debug("Failed to perform validation due to " + e, e);
+            getLogger().debug("Failed to perform validation", e);
             failureCause = e;
         } catch (final Error e) {
-            getLogger().error("Failed to perform validation due to " + e, e);
+            getLogger().error("Failed to perform validation", e);
             failureCause = e;
         }
 
@@ -1318,7 +1318,12 @@ public abstract class AbstractComponentNode implements ComponentNode {
                     isProvided = false;
                 }
 
-                final Parameter updatedParameter = new Parameter(parameterDescriptor, parameterUpdate.getPreviousValue(), null, isProvided);
+                final Parameter updatedParameter = new Parameter.Builder()
+                    .descriptor(parameterDescriptor)
+                    .value(parameterUpdate.getPreviousValue())
+                    .provided(isProvided)
+                    .build();
+
                 return Optional.of(updatedParameter);
             }
 
@@ -1382,6 +1387,11 @@ public abstract class AbstractComponentNode implements ComponentNode {
     public void resetValidationState() {
         lock.lock();
         try {
+            if (!isValidationNecessary()) {
+                logger.debug("Triggered to reset validation state of {} but will leave validation state as {} because validation is not necessary in its current state", this, validationState.get());
+                return;
+            }
+
             validationContext = null;
             validationState.set(new ValidationState(ValidationStatus.VALIDATING, Collections.emptyList()));
 

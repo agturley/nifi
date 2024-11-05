@@ -16,6 +16,26 @@
  */
 package org.apache.nifi.controller.repository;
 
+import org.apache.nifi.controller.repository.claim.ContentClaim;
+import org.apache.nifi.controller.repository.claim.ResourceClaim;
+import org.apache.nifi.controller.repository.claim.StandardContentClaim;
+import org.apache.nifi.controller.repository.claim.StandardResourceClaim;
+import org.apache.nifi.controller.repository.claim.StandardResourceClaimManager;
+import org.apache.nifi.controller.repository.util.DiskUtils;
+import org.apache.nifi.events.EventReporter;
+import org.apache.nifi.processor.DataUnit;
+import org.apache.nifi.stream.io.StreamUtils;
+import org.apache.nifi.util.NiFiProperties;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -39,23 +59,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
-import org.apache.nifi.controller.repository.claim.ContentClaim;
-import org.apache.nifi.controller.repository.claim.ResourceClaim;
-import org.apache.nifi.controller.repository.claim.StandardContentClaim;
-import org.apache.nifi.controller.repository.claim.StandardResourceClaim;
-import org.apache.nifi.controller.repository.claim.StandardResourceClaimManager;
-import org.apache.nifi.controller.repository.util.DiskUtils;
-import org.apache.nifi.events.EventReporter;
-import org.apache.nifi.processor.DataUnit;
-import org.apache.nifi.stream.io.StreamUtils;
-import org.apache.nifi.util.NiFiProperties;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.Timeout;
-import org.junit.jupiter.api.condition.DisabledOnOs;
-import org.junit.jupiter.api.condition.OS;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -69,6 +72,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class TestFileSystemRepository {
 
     public static final File helloWorldFile = new File("src/test/resources/hello.txt");
+    private static final Logger logger = LoggerFactory.getLogger(TestFileSystemRepository.class);
 
     private FileSystemRepository repository = null;
     private StandardResourceClaimManager claimManager = null;
@@ -110,18 +114,14 @@ public class TestFileSystemRepository {
             try (final OutputStream out = repository.write(claim)) {
                 out.write(content);
             }
-            //            final ContentClaim claim = cache.getContentClaim();
-            //            try (final OutputStream out = cache.write(claim)) {
-            //                out.write(content);
-            //            }
         }
         final long millis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
 
         final long mb = bytesToWrite / (1024 * 1024);
         final long seconds = millis / 1000L;
         final double mbps = (double) mb / (double) seconds;
-        System.out.println("Took " + millis + " millis to write " + contentSize + " bytes " + iterations + " times (total of "
-                + NumberFormat.getNumberInstance(Locale.US).format(bytesToWrite) + " bytes) for a write rate of " + mbps + " MB/s");
+        logger.info("Took {} millis to write {} bytes {} times (total of {} bytes) for a write rate of {} MB/s",
+                millis, contentSize, iterations, NumberFormat.getNumberInstance(Locale.US).format(bytesToWrite), mbps);
     }
 
     @Test
@@ -183,7 +183,6 @@ public class TestFileSystemRepository {
         // Perform a few iterations to ensure that it works not just the first time, since there is a lot of logic on initialization.
         for (int i = 0; i < 3; i++) {
             final File archiveDir = containerPath.resolve(String.valueOf(i)).resolve("archive").toFile();
-            assertTrue(archiveDir.mkdirs());
             final File archivedFile = new File(archiveDir, "1234");
 
             try (final OutputStream fos = new FileOutputStream(archivedFile)) {
@@ -213,7 +212,6 @@ public class TestFileSystemRepository {
         // Perform a few iterations to ensure that it works not just the first time, since there is a lot of logic on initialization.
         for (int i = 0; i < 3; i++) {
             final File archiveDir = containerPath.resolve(String.valueOf(i)).resolve("archive").toFile();
-            assertTrue(archiveDir.mkdirs());
             final File archivedFile = new File(archiveDir, "1234");
 
             try (final OutputStream fos = new FileOutputStream(archivedFile)) {

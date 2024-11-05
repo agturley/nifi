@@ -68,6 +68,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -123,6 +125,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 public class StandardProcessSessionIT {
+    private static final Logger logger = LoggerFactory.getLogger(StandardProcessSessionIT.class);
     private static final Relationship FAKE_RELATIONSHIP = new Relationship.Builder().name("FAKE").build();
 
     private StandardProcessSession session;
@@ -222,7 +225,8 @@ public class StandardProcessSessionIT {
         stateManager = new MockStateManager(connectable);
         stateManager.setIgnoreAnnotations(true);
 
-        context = new StandardRepositoryContext(connectable, new AtomicLong(0L), contentRepo, flowFileRepo, flowFileEventRepository, counterRepository, provenanceRepo, stateManager);
+        context = new StandardRepositoryContext(connectable, new AtomicLong(0L), contentRepo, flowFileRepo, flowFileEventRepository,
+            counterRepository, provenanceRepo, stateManager, 50_000L);
         session = new StandardProcessSession(context, () -> false, new NopPerformanceTracker());
     }
 
@@ -238,7 +242,7 @@ public class StandardProcessSessionIT {
         final FlowFileSwapManager swapManager = Mockito.mock(FlowFileSwapManager.class);
         final ProcessScheduler processScheduler = Mockito.mock(ProcessScheduler.class);
 
-        final StandardFlowFileQueue actualQueue = new StandardFlowFileQueue("1", flowFileRepo, provenanceRepo, null,
+        final StandardFlowFileQueue actualQueue = new StandardFlowFileQueue("1", flowFileRepo, provenanceRepo,
                 processScheduler, swapManager, null, 10000, "0 sec", 0L, "0 B");
         return Mockito.spy(actualQueue);
     }
@@ -1793,11 +1797,11 @@ public class StandardProcessSessionIT {
             try {
                 standardProcessSessions[i].read(flowFile, in -> StreamUtils.fillBuffer(in, buff));
             } catch (Exception e) {
-                System.out.println("Failed at file:" + i);
+                logger.error("Failed at file:{}", i);
                 throw e;
             }
             if (i % 1000 == 0) {
-                System.out.println("i:" + i);
+                logger.info("i:{}", i);
             }
         }
     }
@@ -3131,7 +3135,8 @@ public class StandardProcessSessionIT {
                 flowFileEventRepository,
                 counterRepository,
                 provenanceRepo,
-                stateManager);
+                stateManager,
+                50_000L);
         return new StandardProcessSession(context, () -> false, new NopPerformanceTracker());
 
     }

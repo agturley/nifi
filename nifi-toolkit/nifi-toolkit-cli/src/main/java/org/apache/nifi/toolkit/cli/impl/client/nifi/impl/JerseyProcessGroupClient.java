@@ -24,6 +24,7 @@ import org.apache.nifi.toolkit.cli.impl.client.nifi.RequestConfig;
 import org.apache.nifi.toolkit.cli.impl.util.FileUtils;
 import org.apache.nifi.web.api.entity.ControllerServiceEntity;
 import org.apache.nifi.web.api.entity.CopySnippetRequestEntity;
+import org.apache.nifi.web.api.entity.DropRequestEntity;
 import org.apache.nifi.web.api.entity.FlowComparisonEntity;
 import org.apache.nifi.web.api.entity.FlowEntity;
 import org.apache.nifi.web.api.entity.ProcessGroupEntity;
@@ -119,7 +120,30 @@ public class JerseyProcessGroupClient extends AbstractJerseyClient implements Pr
        });
    }
 
-   @Override
+    @Override
+    public ProcessGroupEntity deleteProcessGroup(final ProcessGroupEntity entity) throws NiFiClientException, IOException {
+        if (entity == null) {
+            throw new IllegalArgumentException("Process group entity cannot be null");
+        }
+        if (entity.getRevision() == null || entity.getRevision().getVersion() == null) {
+            throw new IllegalArgumentException("Process group revision cannot be null");
+        }
+
+        return executeAction("Error deleting process group", () -> {
+            WebTarget target = processGroupsTarget
+                    .path("{id}")
+                    .resolveTemplate("id", entity.getId())
+                    .queryParam("version", entity.getRevision().getVersion());
+
+            if (entity.isDisconnectedNodeAcknowledged() == Boolean.TRUE) {
+                target = target.queryParam("disconnectedNodeAcknowledged", "true");
+            }
+
+            return getRequestBuilder(target).delete(ProcessGroupEntity.class);
+        });
+    }
+
+    @Override
    public ControllerServiceEntity  createControllerService(
            final String processGroupId, final ControllerServiceEntity controllerService) throws NiFiClientException, IOException {
        if (StringUtils.isBlank(processGroupId)) {
@@ -260,6 +284,41 @@ public class JerseyProcessGroupClient extends AbstractJerseyClient implements Pr
                     .accept(MediaType.APPLICATION_JSON)
                     .get();
             return FileUtils.getFileContent(response, outputFile);
+        });
+    }
+
+    @Override
+    public DropRequestEntity emptyQueues(String processGroupId) throws NiFiClientException, IOException {
+        if (StringUtils.isBlank(processGroupId)) {
+            throw new IllegalArgumentException("Process group id cannot be null or blank");
+        }
+
+        return executeAction("Error emptying queues in Process Group", () -> {
+            final WebTarget target = processGroupsTarget
+                .path("{id}/empty-all-connections-requests")
+                .resolveTemplate("id", processGroupId);
+
+            return getRequestBuilder(target).post(null, DropRequestEntity.class);
+        });
+    }
+
+    @Override
+    public DropRequestEntity getEmptyQueuesRequest(String processGroupId, String requestId)
+            throws NiFiClientException, IOException {
+        if (StringUtils.isBlank(processGroupId)) {
+            throw new IllegalArgumentException("Process group id cannot be null or blank");
+        }
+        if (StringUtils.isBlank(requestId)) {
+            throw new IllegalArgumentException("Request id cannot be null or blank");
+        }
+
+        return executeAction("Error getting Drop Request status for Process Group", () -> {
+            final WebTarget target = processGroupsTarget
+                .path("{id}/empty-all-connections-requests/{drop-request-id}")
+                .resolveTemplate("id", processGroupId)
+                .resolveTemplate("drop-request-id", requestId);
+
+            return getRequestBuilder(target).get(DropRequestEntity.class);
         });
     }
 

@@ -35,9 +35,11 @@ import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Supplier;
 import org.apache.nifi.c2.client.C2ClientConfig;
 import org.apache.nifi.c2.client.PersistentUuidGenerator;
 import org.apache.nifi.c2.client.service.model.RuntimeInfoWrapper;
@@ -46,12 +48,16 @@ import org.apache.nifi.c2.protocol.api.AgentManifest;
 import org.apache.nifi.c2.protocol.api.AgentRepositories;
 import org.apache.nifi.c2.protocol.api.AgentResourceConsumption;
 import org.apache.nifi.c2.protocol.api.AgentStatus;
+import org.apache.nifi.c2.protocol.api.ProcessorBulletin;
+import org.apache.nifi.c2.protocol.api.ProcessorStatus;
+import org.apache.nifi.c2.protocol.api.ResourceInfo;
 import org.apache.nifi.c2.protocol.api.C2Heartbeat;
 import org.apache.nifi.c2.protocol.api.DeviceInfo;
 import org.apache.nifi.c2.protocol.api.FlowInfo;
 import org.apache.nifi.c2.protocol.api.FlowQueueStatus;
 import org.apache.nifi.c2.protocol.api.NetworkInfo;
 import org.apache.nifi.c2.protocol.api.SupportedOperation;
+import org.apache.nifi.c2.protocol.api.ResourcesGlobalHash;
 import org.apache.nifi.c2.protocol.api.SystemInfo;
 import org.apache.nifi.c2.protocol.component.api.RuntimeManifest;
 import org.slf4j.Logger;
@@ -67,15 +73,18 @@ public class C2HeartbeatFactory {
     private final C2ClientConfig clientConfig;
     private final FlowIdHolder flowIdHolder;
     private final ManifestHashProvider manifestHashProvider;
+    private final Supplier<ResourcesGlobalHash> resourcesGlobalHashSupplier;
 
     private String agentId;
     private String deviceId;
     private File confDirectory;
 
-    public C2HeartbeatFactory(C2ClientConfig clientConfig, FlowIdHolder flowIdHolder, ManifestHashProvider manifestHashProvider) {
+    public C2HeartbeatFactory(C2ClientConfig clientConfig, FlowIdHolder flowIdHolder, ManifestHashProvider manifestHashProvider,
+                              Supplier<ResourcesGlobalHash> resourcesGlobalHashSupplier) {
         this.clientConfig = clientConfig;
         this.flowIdHolder = flowIdHolder;
         this.manifestHashProvider = manifestHashProvider;
+        this.resourcesGlobalHashSupplier = resourcesGlobalHashSupplier;
     }
 
     public C2Heartbeat create(RuntimeInfoWrapper runtimeInfoWrapper) {
@@ -83,15 +92,21 @@ public class C2HeartbeatFactory {
 
         heartbeat.setAgentInfo(getAgentInfo(runtimeInfoWrapper.getAgentRepositories(), runtimeInfoWrapper.getManifest()));
         heartbeat.setDeviceInfo(generateDeviceInfo());
-        heartbeat.setFlowInfo(getFlowInfo(runtimeInfoWrapper.getQueueStatus()));
+        heartbeat.setFlowInfo(getFlowInfo(runtimeInfoWrapper.getQueueStatus(), runtimeInfoWrapper.getProcessorBulletins(), runtimeInfoWrapper.getProcessorStatus()));
         heartbeat.setCreated(System.currentTimeMillis());
+
+        ResourceInfo resourceInfo = new ResourceInfo();
+        resourceInfo.setHash(resourcesGlobalHashSupplier.get().getDigest());
+        heartbeat.setResourceInfo(resourceInfo);
 
         return heartbeat;
     }
 
-    private FlowInfo getFlowInfo(Map<String, FlowQueueStatus> queueStatus) {
+    private FlowInfo getFlowInfo(Map<String, FlowQueueStatus> queueStatus, List<ProcessorBulletin> processorBulletins, List<ProcessorStatus> processorStatus) {
         FlowInfo flowInfo = new FlowInfo();
         flowInfo.setQueues(queueStatus);
+        flowInfo.setProcessorBulletins(processorBulletins);
+        flowInfo.setProcessorStatuses(processorStatus);
         Optional.ofNullable(flowIdHolder.getFlowId()).ifPresent(flowInfo::setFlowId);
         return flowInfo;
     }

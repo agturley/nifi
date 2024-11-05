@@ -27,11 +27,17 @@ import org.apache.nifi.toolkit.cli.impl.command.nifi.cs.EnableControllerServices
 import org.apache.nifi.toolkit.cli.impl.command.nifi.cs.GetControllerService;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.cs.GetControllerServices;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.ClusterSummary;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.CreateFlowAnalysisRule;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.CreateReportingTask;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.CurrentUser;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.DeleteFlowAnalysisRule;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.DisableFlowAnalysisRules;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.EnableFlowAnalysisRules;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.ExportReportingTask;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.ExportReportingTasks;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.GetControllerConfiguration;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.GetFlowAnalysisRule;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.GetFlowAnalysisRules;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.GetReportingTask;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.GetReportingTasks;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.GetRootId;
@@ -39,14 +45,25 @@ import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.ImportReportingTasks;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.StartReportingTasks;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.StopReportingTasks;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.flow.UpdateControllerConfiguration;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.nar.DeleteNar;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.nar.DownloadNar;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.nar.ListNarComponentTypes;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.nar.ListNars;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.nar.UploadNar;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.nodes.ConnectNode;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.nodes.DeleteNode;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.nodes.DisconnectNode;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.nodes.GetNode;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.nodes.GetNodes;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.nodes.OffloadNode;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.params.AddAssetReference;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.params.CreateAsset;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.params.CreateParamContext;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.params.CreateParamProvider;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.params.DeleteAsset;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.params.GetAsset;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.params.ListAssets;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.params.RemoveAssetReference;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.params.DeleteParam;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.params.DeleteParamContext;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.params.DeleteParamProvider;
@@ -67,7 +84,9 @@ import org.apache.nifi.toolkit.cli.impl.command.nifi.pg.PGChangeVersion;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.pg.PGConnect;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.pg.PGCreate;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.pg.PGCreateControllerService;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.pg.PGDelete;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.pg.PGDisableControllerServices;
+import org.apache.nifi.toolkit.cli.impl.command.nifi.pg.PGEmptyQueues;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.pg.PGEnableControllerServices;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.pg.PGExport;
 import org.apache.nifi.toolkit.cli.impl.command.nifi.pg.PGGetAllVersions;
@@ -112,7 +131,7 @@ public class NiFiCommandGroup extends AbstractCommandGroup {
 
     @Override
     protected List<Command> createCommands() {
-        final List<AbstractNiFiCommand> commands = new ArrayList<>();
+        final List<AbstractNiFiCommand<?>> commands = new ArrayList<>();
         commands.add(new CurrentUser());
         commands.add(new ClusterSummary());
         commands.add(new ConnectNode());
@@ -146,6 +165,8 @@ public class NiFiCommandGroup extends AbstractCommandGroup {
         commands.add(new PGSetParamContext());
         commands.add(new PGReplace());
         commands.add(new PGExport());
+        commands.add(new PGEmptyQueues());
+        commands.add(new PGDelete());
         commands.add(new GetControllerServices());
         commands.add(new GetControllerService());
         commands.add(new CreateControllerService());
@@ -160,6 +181,12 @@ public class NiFiCommandGroup extends AbstractCommandGroup {
         commands.add(new ExportReportingTasks());
         commands.add(new ExportReportingTask());
         commands.add(new ImportReportingTasks());
+        commands.add(new CreateFlowAnalysisRule());
+        commands.add(new GetFlowAnalysisRules());
+        commands.add(new GetFlowAnalysisRule());
+        commands.add(new EnableFlowAnalysisRules());
+        commands.add(new DisableFlowAnalysisRules());
+        commands.add(new DeleteFlowAnalysisRule());
         commands.add(new ListUsers());
         commands.add(new CreateUser());
         commands.add(new ListUserGroups());
@@ -190,6 +217,17 @@ public class NiFiCommandGroup extends AbstractCommandGroup {
         commands.add(new GetControllerConfiguration());
         commands.add(new UpdateControllerConfiguration());
         commands.add(new ChangeVersionProcessor());
+        commands.add(new UploadNar());
+        commands.add(new DownloadNar());
+        commands.add(new ListNars());
+        commands.add(new ListNarComponentTypes());
+        commands.add(new DeleteNar());
+        commands.add(new CreateAsset());
+        commands.add(new ListAssets());
+        commands.add(new GetAsset());
+        commands.add(new DeleteAsset());
+        commands.add(new AddAssetReference());
+        commands.add(new RemoveAssetReference());
         return new ArrayList<>(commands);
     }
 }

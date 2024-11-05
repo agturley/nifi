@@ -17,6 +17,8 @@
 package org.apache.nifi.web;
 
 import io.prometheus.client.CollectorRegistry;
+import jakarta.ws.rs.WebApplicationException;
+import jakarta.ws.rs.core.Response;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.nifi.action.Action;
 import org.apache.nifi.action.Component;
@@ -24,6 +26,8 @@ import org.apache.nifi.action.FlowChangeAction;
 import org.apache.nifi.action.Operation;
 import org.apache.nifi.action.details.FlowChangePurgeDetails;
 import org.apache.nifi.admin.service.AuditService;
+import org.apache.nifi.asset.Asset;
+import org.apache.nifi.asset.AssetManager;
 import org.apache.nifi.attribute.expression.language.Query;
 import org.apache.nifi.authorization.AccessDeniedException;
 import org.apache.nifi.authorization.AccessPolicy;
@@ -44,7 +48,13 @@ import org.apache.nifi.authorization.resource.OperationAuthorizable;
 import org.apache.nifi.authorization.resource.ResourceFactory;
 import org.apache.nifi.authorization.user.NiFiUser;
 import org.apache.nifi.authorization.user.NiFiUserUtils;
+import org.apache.nifi.bundle.Bundle;
 import org.apache.nifi.bundle.BundleCoordinate;
+import org.apache.nifi.c2.protocol.component.api.ControllerServiceDefinition;
+import org.apache.nifi.c2.protocol.component.api.FlowAnalysisRuleDefinition;
+import org.apache.nifi.c2.protocol.component.api.ParameterProviderDefinition;
+import org.apache.nifi.c2.protocol.component.api.ProcessorDefinition;
+import org.apache.nifi.c2.protocol.component.api.ReportingTaskDefinition;
 import org.apache.nifi.c2.protocol.component.api.RuntimeManifest;
 import org.apache.nifi.cluster.coordination.ClusterCoordinator;
 import org.apache.nifi.cluster.coordination.heartbeat.HeartbeatMonitor;
@@ -71,6 +81,7 @@ import org.apache.nifi.connectable.Connection;
 import org.apache.nifi.connectable.Funnel;
 import org.apache.nifi.connectable.Port;
 import org.apache.nifi.controller.ComponentNode;
+import org.apache.nifi.controller.ControllerService;
 import org.apache.nifi.controller.Counter;
 import org.apache.nifi.controller.FlowAnalysisRuleNode;
 import org.apache.nifi.controller.FlowController;
@@ -119,6 +130,7 @@ import org.apache.nifi.flow.VersionedProcessGroup;
 import org.apache.nifi.flow.VersionedPropertyDescriptor;
 import org.apache.nifi.flow.VersionedReportingTask;
 import org.apache.nifi.flow.VersionedReportingTaskSnapshot;
+import org.apache.nifi.flowanalysis.FlowAnalysisRule;
 import org.apache.nifi.groups.ProcessGroup;
 import org.apache.nifi.groups.ProcessGroupCounts;
 import org.apache.nifi.groups.RemoteProcessGroup;
@@ -126,26 +138,34 @@ import org.apache.nifi.history.History;
 import org.apache.nifi.history.HistoryQuery;
 import org.apache.nifi.history.PreviousValue;
 import org.apache.nifi.metrics.jvm.JmxJvmMetrics;
+import org.apache.nifi.nar.ExtensionDefinition;
 import org.apache.nifi.nar.ExtensionManager;
+import org.apache.nifi.nar.NarInstallRequest;
+import org.apache.nifi.nar.NarManager;
+import org.apache.nifi.nar.NarNode;
+import org.apache.nifi.nar.NarSource;
 import org.apache.nifi.parameter.Parameter;
 import org.apache.nifi.parameter.ParameterContext;
 import org.apache.nifi.parameter.ParameterContextLookup;
 import org.apache.nifi.parameter.ParameterDescriptor;
 import org.apache.nifi.parameter.ParameterGroupConfiguration;
 import org.apache.nifi.parameter.ParameterLookup;
+import org.apache.nifi.parameter.ParameterProvider;
 import org.apache.nifi.parameter.ParameterReferenceManager;
 import org.apache.nifi.parameter.StandardParameterContext;
+import org.apache.nifi.processor.Processor;
 import org.apache.nifi.processor.VerifiableProcessor;
-import org.apache.nifi.prometheus.util.AbstractMetricsRegistry;
-import org.apache.nifi.prometheus.util.BulletinMetricsRegistry;
-import org.apache.nifi.prometheus.util.ClusterMetricsRegistry;
-import org.apache.nifi.prometheus.util.ConnectionAnalyticsMetricsRegistry;
-import org.apache.nifi.prometheus.util.JvmMetricsRegistry;
-import org.apache.nifi.prometheus.util.NiFiMetricsRegistry;
-import org.apache.nifi.prometheus.util.PrometheusMetricsUtil;
+import org.apache.nifi.prometheusutil.AbstractMetricsRegistry;
+import org.apache.nifi.prometheusutil.BulletinMetricsRegistry;
+import org.apache.nifi.prometheusutil.ClusterMetricsRegistry;
+import org.apache.nifi.prometheusutil.ConnectionAnalyticsMetricsRegistry;
+import org.apache.nifi.prometheusutil.JvmMetricsRegistry;
+import org.apache.nifi.prometheusutil.NiFiMetricsRegistry;
+import org.apache.nifi.prometheusutil.PrometheusMetricsUtil;
 import org.apache.nifi.registry.flow.FlowLocation;
 import org.apache.nifi.registry.flow.FlowRegistryBranch;
 import org.apache.nifi.registry.flow.FlowRegistryBucket;
+import org.apache.nifi.registry.flow.FlowRegistryClient;
 import org.apache.nifi.registry.flow.FlowRegistryClientContextFactory;
 import org.apache.nifi.registry.flow.FlowRegistryClientNode;
 import org.apache.nifi.registry.flow.FlowRegistryClientUserContext;
@@ -180,6 +200,7 @@ import org.apache.nifi.reporting.Bulletin;
 import org.apache.nifi.reporting.BulletinQuery;
 import org.apache.nifi.reporting.BulletinRepository;
 import org.apache.nifi.reporting.ComponentType;
+import org.apache.nifi.reporting.ReportingTask;
 import org.apache.nifi.reporting.VerifiableReportingTask;
 import org.apache.nifi.util.BundleUtils;
 import org.apache.nifi.util.FlowDifferenceFilters;
@@ -190,6 +211,7 @@ import org.apache.nifi.validation.RuleViolationsManager;
 import org.apache.nifi.web.api.dto.AccessPolicyDTO;
 import org.apache.nifi.web.api.dto.AccessPolicySummaryDTO;
 import org.apache.nifi.web.api.dto.AffectedComponentDTO;
+import org.apache.nifi.web.api.dto.AssetReferenceDTO;
 import org.apache.nifi.web.api.dto.BulletinBoardDTO;
 import org.apache.nifi.web.api.dto.BulletinDTO;
 import org.apache.nifi.web.api.dto.BulletinQueryDTO;
@@ -227,6 +249,8 @@ import org.apache.nifi.web.api.dto.FlowSnippetDTO;
 import org.apache.nifi.web.api.dto.FunnelDTO;
 import org.apache.nifi.web.api.dto.LabelDTO;
 import org.apache.nifi.web.api.dto.ListingRequestDTO;
+import org.apache.nifi.web.api.dto.NarCoordinateDTO;
+import org.apache.nifi.web.api.dto.NarSummaryDTO;
 import org.apache.nifi.web.api.dto.NodeDTO;
 import org.apache.nifi.web.api.dto.ParameterContextDTO;
 import org.apache.nifi.web.api.dto.ParameterDTO;
@@ -264,6 +288,7 @@ import org.apache.nifi.web.api.dto.diagnostics.JVMDiagnosticsDTO;
 import org.apache.nifi.web.api.dto.diagnostics.JVMDiagnosticsSnapshotDTO;
 import org.apache.nifi.web.api.dto.diagnostics.ProcessorDiagnosticsDTO;
 import org.apache.nifi.web.api.dto.flow.FlowDTO;
+import org.apache.nifi.web.api.dto.provenance.LatestProvenanceEventsDTO;
 import org.apache.nifi.web.api.dto.provenance.ProvenanceDTO;
 import org.apache.nifi.web.api.dto.provenance.ProvenanceEventDTO;
 import org.apache.nifi.web.api.dto.provenance.ProvenanceOptionsDTO;
@@ -285,6 +310,7 @@ import org.apache.nifi.web.api.entity.AccessPolicySummaryEntity;
 import org.apache.nifi.web.api.entity.ActionEntity;
 import org.apache.nifi.web.api.entity.ActivateControllerServicesEntity;
 import org.apache.nifi.web.api.entity.AffectedComponentEntity;
+import org.apache.nifi.web.api.entity.AssetEntity;
 import org.apache.nifi.web.api.entity.BulletinEntity;
 import org.apache.nifi.web.api.entity.ComponentReferenceEntity;
 import org.apache.nifi.web.api.entity.ComponentValidationResultEntity;
@@ -309,6 +335,9 @@ import org.apache.nifi.web.api.entity.FlowRegistryBucketEntity;
 import org.apache.nifi.web.api.entity.FlowRegistryClientEntity;
 import org.apache.nifi.web.api.entity.FunnelEntity;
 import org.apache.nifi.web.api.entity.LabelEntity;
+import org.apache.nifi.web.api.entity.LatestProvenanceEventsEntity;
+import org.apache.nifi.web.api.entity.NarDetailsEntity;
+import org.apache.nifi.web.api.entity.NarSummaryEntity;
 import org.apache.nifi.web.api.entity.ParameterContextEntity;
 import org.apache.nifi.web.api.entity.ParameterEntity;
 import org.apache.nifi.web.api.entity.ParameterProviderEntity;
@@ -374,12 +403,13 @@ import org.apache.nifi.web.util.PredictionBasedParallelProcessingService;
 import org.apache.nifi.web.util.SnippetUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import jakarta.ws.rs.WebApplicationException;
-import jakarta.ws.rs.core.Response;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.security.oauth2.core.OAuth2Token;
+import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -408,6 +438,7 @@ import static org.apache.commons.lang3.StringUtils.containsIgnoreCase;
 /**
  * Implementation of NiFiServiceFacade that performs revision checking.
  */
+@Service
 public class StandardNiFiServiceFacade implements NiFiServiceFacade {
     private static final Logger logger = LoggerFactory.getLogger(StandardNiFiServiceFacade.class);
     private static final int VALIDATION_WAIT_MILLIS = 50;
@@ -462,8 +493,9 @@ public class StandardNiFiServiceFacade implements NiFiServiceFacade {
     private final ClusterMetricsRegistry clusterMetricsRegistry = new ClusterMetricsRegistry();
 
     private RuleViolationsManager ruleViolationsManager;
-
     private PredictionBasedParallelProcessingService parallelProcessingService;
+    private NarManager narManager;
+    private AssetManager assetManager;
 
     // -----------------------------------------
     // Synchronization methods
@@ -1378,18 +1410,47 @@ public class StandardNiFiServiceFacade implements NiFiServiceFacade {
     }
 
     private Parameter createParameter(final ParameterDTO dto) {
-        if (dto.getDescription() == null && dto.getSensitive() == null && dto.getValue() == null) {
+        if (dto.getDescription() == null && dto.getSensitive() == null && dto.getValue() == null && dto.getReferencedAssets() == null) {
             return null; // null description, sensitivity flag, and value indicates a deletion, which we want to represent as a null Parameter.
         }
 
-        final ParameterDescriptor descriptor = new ParameterDescriptor.Builder()
+        final String dtoValue = dto.getValue();
+        final List<AssetReferenceDTO> referencedAssets = dto.getReferencedAssets();
+        final boolean referencesAsset = referencedAssets != null && !referencedAssets.isEmpty();
+        final String parameterContextId = dto.getParameterContext() == null ? null : dto.getParameterContext().getId();
+
+        final String value;
+        List<Asset> assets = null;
+        if (dtoValue == null && !referencesAsset && Boolean.TRUE.equals(dto.getValueRemoved())) {
+            value = null;
+        } else if (referencesAsset)  {
+            assets = getAssets(referencedAssets);
+            value = null;
+        } else {
+            value = dto.getValue();
+        }
+
+        return new Parameter.Builder()
             .name(dto.getName())
             .description(dto.getDescription())
             .sensitive(Boolean.TRUE.equals(dto.getSensitive()))
+            .value(value)
+            .referencedAssets(assets)
+            .parameterContextId(parameterContextId)
+            .provided(dto.getProvided())
             .build();
+    }
 
-        final String parameterContextId = dto.getParameterContext() == null ? null : dto.getParameterContext().getId();
-        return new Parameter(descriptor, dto.getValue(), parameterContextId, dto.getProvided());
+    private List<Asset> getAssets(final List<AssetReferenceDTO> referencedAssets) {
+        return Stream.ofNullable(referencedAssets)
+                .flatMap(Collection::stream)
+                .map(AssetReferenceDTO::getId)
+                .map(this::getAsset)
+                .collect(Collectors.toList());
+    }
+
+    private Asset getAsset(final String assetId) {
+        return assetManager.getAsset(assetId).orElseThrow(() -> new ResourceNotFoundException("Unable to find asset with id " + assetId));
     }
 
     @Override
@@ -2200,7 +2261,7 @@ public class StandardNiFiServiceFacade implements NiFiServiceFacade {
                             accessPolicyDAO.deleteAccessPolicy(readPolicy.getIdentifier());
                         }
                     } catch (final Exception e) {
-                        logger.warn(String.format("Unable to remove access policy for %s %s after component removal.", action, resource.getIdentifier()), e);
+                        logger.warn("Unable to remove access policy for {} {} after component removal.", action, resource.getIdentifier(), e);
                     }
                 }
             }
@@ -2793,7 +2854,7 @@ public class StandardNiFiServiceFacade implements NiFiServiceFacade {
                             }
                         });
                     } catch (final Exception e) {
-                        logger.warn(String.format("Unable to create ControllerService of type %s to populate default values.", dto.getType()));
+                        logger.warn("Unable to create ControllerService of type {} to populate default values.", dto.getType());
                     }
                 });
             }
@@ -2817,7 +2878,7 @@ public class StandardNiFiServiceFacade implements NiFiServiceFacade {
                             }
                         });
                     } catch (final Exception e) {
-                        logger.warn(String.format("Unable to create Processor of type %s to populate default values.", dto.getType()));
+                        logger.warn("Unable to create Processor of type {} to populate default values.", dto.getType());
                     }
                 });
             }
@@ -3256,27 +3317,24 @@ public class StandardNiFiServiceFacade implements NiFiServiceFacade {
     }
 
     @Override
-    public Set<VersionedFlowEntity> getFlowsForUser(final String registryClientId, final String bucketId) {
+    public Set<VersionedFlowEntity> getFlowsForUser(final String registryClientId, final String branch, final String bucketId) {
         final FlowRegistryClientUserContext clientUserContext = FlowRegistryClientContextFactory.getContextForUser(NiFiUserUtils.getNiFiUser());
-        final FlowRegistryBranch defaultBranch = flowRegistryDAO.getDefaultBranchForUser(clientUserContext, registryClientId);
-        return flowRegistryDAO.getFlowsForUser(clientUserContext, registryClientId, defaultBranch.getName(), bucketId).stream()
+        return flowRegistryDAO.getFlowsForUser(clientUserContext, registryClientId, branch, bucketId).stream()
                 .map(rf -> createVersionedFlowEntity(registryClientId, rf))
                 .collect(Collectors.toSet());
     }
 
     @Override
-    public VersionedFlowEntity getFlowForUser(final String registryClientId, final String bucketId, final String flowId) {
+    public VersionedFlowEntity getFlowForUser(final String registryClientId, final String branch, final String bucketId, final String flowId) {
         final FlowRegistryClientUserContext clientUserContext = FlowRegistryClientContextFactory.getContextForUser(NiFiUserUtils.getNiFiUser());
-        final FlowRegistryBranch defaultBranch = flowRegistryDAO.getDefaultBranchForUser(clientUserContext, registryClientId);
-        final RegisteredFlow flow = flowRegistryDAO.getFlowForUser(clientUserContext, registryClientId, defaultBranch.getName(), bucketId, flowId);
+        final RegisteredFlow flow = flowRegistryDAO.getFlowForUser(clientUserContext, registryClientId, branch, bucketId, flowId);
         return createVersionedFlowEntity(registryClientId, flow);
     }
 
     @Override
-    public Set<VersionedFlowSnapshotMetadataEntity> getFlowVersionsForUser(final String registryClientId, final String bucketId, final String flowId) {
+    public Set<VersionedFlowSnapshotMetadataEntity> getFlowVersionsForUser(final String registryClientId, final String branch, final String bucketId, final String flowId) {
         final FlowRegistryClientUserContext clientUserContext = FlowRegistryClientContextFactory.getContextForUser(NiFiUserUtils.getNiFiUser());
-        final FlowRegistryBranch defaultBranch = flowRegistryDAO.getDefaultBranchForUser(clientUserContext, registryClientId);
-        return flowRegistryDAO.getFlowVersionsForUser(clientUserContext, registryClientId, defaultBranch.getName(), bucketId, flowId).stream()
+        return flowRegistryDAO.getFlowVersionsForUser(clientUserContext, registryClientId, branch, bucketId, flowId).stream()
                 .map(md -> createVersionedFlowSnapshotMetadataEntity(registryClientId, md))
                 .collect(Collectors.toCollection(LinkedHashSet::new));
     }
@@ -3644,6 +3702,15 @@ public class StandardNiFiServiceFacade implements NiFiServiceFacade {
     }
 
     @Override
+    public LatestProvenanceEventsEntity getLatestProvenanceEvents(final String componentId, final int eventLimit) {
+        final LatestProvenanceEventsDTO dto = controllerFacade.getLatestProvenanceEvents(componentId, eventLimit);
+
+        final LatestProvenanceEventsEntity entity = new LatestProvenanceEventsEntity();
+        entity.setLatestProvenanceEvents(dto);
+        return entity;
+    }
+
+    @Override
     public ProcessGroupStatusEntity getProcessGroupStatus(final String groupId, final boolean recursive) {
         final ProcessGroup processGroup = processGroupDAO.getProcessGroup(groupId);
         final PermissionsDTO permissions = dtoFactory.createPermissionsDto(processGroup);
@@ -3884,6 +3951,56 @@ public class StandardNiFiServiceFacade implements NiFiServiceFacade {
     @Override
     public RuntimeManifest getRuntimeManifest() {
         return controllerFacade.getRuntimeManifest();
+    }
+
+    @Override
+    public ProcessorDefinition getProcessorDefinition(String group, String artifact, String version, String type) {
+        final ProcessorDefinition processorDefinition = controllerFacade.getProcessorDefinition(group, artifact, version, type);
+        if (processorDefinition == null) {
+            throw new ResourceNotFoundException("Unable to find definition for [%s:%s:%s:%s]".formatted(group, artifact, version, type));
+        }
+        return processorDefinition;
+    }
+
+    @Override
+    public ControllerServiceDefinition getControllerServiceDefinition(String group, String artifact, String version, String type) {
+        final ControllerServiceDefinition controllerServiceDefinition = controllerFacade.getControllerServiceDefinition(group, artifact, version, type);
+        if (controllerServiceDefinition == null) {
+            throw new ResourceNotFoundException("Unable to find definition for [%s:%s:%s:%s]".formatted(group, artifact, version, type));
+        }
+        return controllerServiceDefinition;
+    }
+
+    @Override
+    public ReportingTaskDefinition getReportingTaskDefinition(String group, String artifact, String version, String type) {
+        final ReportingTaskDefinition reportingTaskDefinition = controllerFacade.getReportingTaskDefinition(group, artifact, version, type);
+        if (reportingTaskDefinition == null) {
+            throw new ResourceNotFoundException("Unable to find definition for [%s:%s:%s:%s]".formatted(group, artifact, version, type));
+        }
+        return reportingTaskDefinition;
+    }
+
+    @Override
+    public ParameterProviderDefinition getParameterProviderDefinition(String group, String artifact, String version, String type) {
+        final ParameterProviderDefinition parameterProviderDefinition = controllerFacade.getParameterProviderDefinition(group, artifact, version, type);
+        if (parameterProviderDefinition == null) {
+            throw new ResourceNotFoundException("Unable to find definition for [%s:%s:%s:%s]".formatted(group, artifact, version, type));
+        }
+        return parameterProviderDefinition;
+    }
+
+    @Override
+    public FlowAnalysisRuleDefinition getFlowAnalysisRuleDefinition(String group, String artifact, String version, String type) {
+        final FlowAnalysisRuleDefinition flowAnalysisRuleDefinition = controllerFacade.getFlowAnalysisRuleDefinition(group, artifact, version, type);
+        if (flowAnalysisRuleDefinition == null) {
+            throw new ResourceNotFoundException("Unable to find definition for [%s:%s:%s:%s]".formatted(group, artifact, version, type));
+        }
+        return flowAnalysisRuleDefinition;
+    }
+
+    @Override
+    public String getAdditionalDetails(String group, String artifact, String version, String type) {
+        return controllerFacade.getAdditionalDetails(group, artifact, version, type);
     }
 
     @Override
@@ -4419,8 +4536,7 @@ public class StandardNiFiServiceFacade implements NiFiServiceFacade {
 
     @Override
     public FlowConfigurationEntity getFlowConfiguration() {
-        final FlowConfigurationDTO dto = dtoFactory.createFlowConfigurationDto(properties.getAutoRefreshInterval(),
-                properties.getDefaultBackPressureObjectThreshold(), properties.getDefaultBackPressureDataSizeThreshold());
+        final FlowConfigurationDTO dto = dtoFactory.createFlowConfigurationDto(properties.getDefaultBackPressureObjectThreshold(), properties.getDefaultBackPressureDataSizeThreshold());
         final FlowConfigurationEntity entity = new FlowConfigurationEntity();
         entity.setFlowConfiguration(dto);
         return entity;
@@ -5256,6 +5372,42 @@ public class StandardNiFiServiceFacade implements NiFiServiceFacade {
         } catch (final IOException | FlowRegistryException e) {
             throw new NiFiCoreException("Failed to remove flow from Flow Registry due to " + e.getMessage(), e);
         }
+    }
+
+    @Override
+    public FlowComparisonEntity getVersionDifference(final String registryId, FlowVersionLocation versionLocationA, FlowVersionLocation versionLocationB) {
+        final FlowComparisonEntity result = new FlowComparisonEntity();
+
+        if (versionLocationA.equals(versionLocationB)) {
+            // If both versions are the same, there is no need for comparison. Comparing them should have the same result but with the cost of some calls to the registry.
+            // Note: because of this optimization we return an empty non-error response in case of non-existing registry, bucket, flow or version if the versions are the same.
+            result.setComponentDifferences(Collections.emptySet());
+            return result;
+        }
+
+        final FlowSnapshotContainer snapshotA = this.getVersionedFlowSnapshot(
+                registryId, versionLocationA.getBranch(), versionLocationA.getBucketId(), versionLocationA.getFlowId(), versionLocationA.getVersion(), true);
+        final FlowSnapshotContainer snapshotB = this.getVersionedFlowSnapshot(
+                registryId, versionLocationB.getBranch(), versionLocationB.getBucketId(), versionLocationB.getFlowId(), versionLocationB.getVersion(), true);
+
+        final VersionedProcessGroup flowContentsA = snapshotA.getFlowSnapshot().getFlowContents();
+        final VersionedProcessGroup flowContentsB = snapshotB.getFlowSnapshot().getFlowContents();
+
+        final FlowComparator flowComparator = new StandardFlowComparator(
+                new StandardComparableDataFlow("Flow A", flowContentsA),
+                new StandardComparableDataFlow("Flow B", flowContentsB),
+                Collections.emptySet(), // Replacement of an external ControllerService is recognized as property change
+                new ConciseEvolvingDifferenceDescriptor(),
+                Function.identity(),
+                VersionedComponent::getIdentifier,
+                FlowComparatorVersionedStrategy.DEEP
+            );
+
+        final FlowComparison flowComparison = flowComparator.compare();
+        final Set<ComponentDifferenceDTO> differenceDtos = dtoFactory.createComponentDifferenceDtosForLocalModifications(flowComparison, flowContentsA, controllerFacade.getFlowManager());
+        result.setComponentDifferences(differenceDtos);
+
+        return result;
     }
 
     @Override
@@ -6562,6 +6714,128 @@ public class StandardNiFiServiceFacade implements NiFiServiceFacade {
         return entity;
     }
 
+    @Override
+    public NarSummaryEntity uploadNar(final InputStream inputStream) throws IOException {
+        final NarInstallRequest installRequest = NarInstallRequest.builder()
+                .source(NarSource.UPLOAD)
+                .sourceIdentifier(NarSource.UPLOAD.name().toLowerCase())
+                .inputStream(inputStream)
+                .build();
+        final NarNode narNode = narManager.installNar(installRequest);
+        final NarSummaryDTO narSummaryDTO = dtoFactory.createNarSummaryDto(narNode);
+        return entityFactory.createNarSummaryEntity(narSummaryDTO);
+    }
+
+    @Override
+    public Set<NarSummaryEntity> getNarSummaries() {
+        return narManager.getNars().stream()
+                .sorted((o1, o2) -> {
+                    final BundleCoordinate coordinate1 = o1.getManifest().getCoordinate();
+                    final BundleCoordinate coordinate2 = o2.getManifest().getCoordinate();
+                    return Comparator.comparing(BundleCoordinate::getGroup)
+                            .thenComparing(BundleCoordinate::getId)
+                            .thenComparing(BundleCoordinate::getVersion)
+                            .compare(coordinate1, coordinate2);
+                })
+                .map(dtoFactory::createNarSummaryDto)
+                .map(entityFactory::createNarSummaryEntity)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    @Override
+    public NarSummaryEntity getNarSummary(final String identifier) {
+        final NarNode narNode = narManager.getNar(identifier)
+                .orElseThrow(() -> new ResourceNotFoundException("A NAR does not exist with the given identifier"));
+        final NarSummaryDTO narSummaryDTO = dtoFactory.createNarSummaryDto(narNode);
+        return entityFactory.createNarSummaryEntity(narSummaryDTO);
+    }
+
+    @Override
+    public NarDetailsEntity getNarDetails(final String identifier) {
+        final NarNode narNode = narManager.getNar(identifier)
+                .orElseThrow(() -> new ResourceNotFoundException("A NAR does not exist with the given identifier"));
+
+        final BundleCoordinate coordinate = narNode.getManifest().getCoordinate();
+        final Set<ExtensionDefinition> extensionDefinitions = new HashSet<>();
+        extensionDefinitions.addAll(controllerFacade.getExtensionManager().getTypes(coordinate));
+        extensionDefinitions.addAll(controllerFacade.getExtensionManager().getPythonExtensions(coordinate));
+
+        final Set<NarCoordinateDTO> dependentCoordinates = new HashSet<>();
+        final Set<Bundle> dependentBundles = controllerFacade.getExtensionManager().getDependentBundles(coordinate);
+        if (dependentBundles != null) {
+            for (final Bundle dependentBundle : dependentBundles) {
+                final NarCoordinateDTO dependentCoordinate = dtoFactory.createNarCoordinateDto(dependentBundle.getBundleDetails().getCoordinate());
+                dependentCoordinates.add(dependentCoordinate);
+            }
+        }
+
+        final NarDetailsEntity componentTypesEntity = new NarDetailsEntity();
+        componentTypesEntity.setNarSummary(dtoFactory.createNarSummaryDto(narNode));
+        componentTypesEntity.setDependentCoordinates(dependentCoordinates);
+        componentTypesEntity.setProcessorTypes(dtoFactory.fromDocumentedTypes(getTypes(extensionDefinitions, Processor.class)));
+        componentTypesEntity.setControllerServiceTypes(dtoFactory.fromDocumentedTypes(getTypes(extensionDefinitions, ControllerService.class)));
+        componentTypesEntity.setReportingTaskTypes(dtoFactory.fromDocumentedTypes(getTypes(extensionDefinitions, ReportingTask.class)));
+        componentTypesEntity.setParameterProviderTypes(dtoFactory.fromDocumentedTypes(getTypes(extensionDefinitions, ParameterProvider.class)));
+        componentTypesEntity.setFlowRegistryClientTypes(dtoFactory.fromDocumentedTypes(getTypes(extensionDefinitions, FlowRegistryClient.class)));
+        componentTypesEntity.setFlowAnalysisRuleTypes(dtoFactory.fromDocumentedTypes(getTypes(extensionDefinitions, FlowAnalysisRule.class)));
+        return componentTypesEntity;
+    }
+
+    private Set<ExtensionDefinition> getTypes(final Set<ExtensionDefinition> extensionDefinitions, final Class<?> extensionType) {
+        return extensionDefinitions.stream()
+                .filter(extensionDefinition -> extensionDefinition.getExtensionType().equals(extensionType))
+                .collect(Collectors.toSet());
+    }
+
+    @Override
+    public InputStream readNar(final String identifier) {
+        return narManager.readNar(identifier);
+    }
+
+    @Override
+    public void verifyDeleteNar(final String identifier, final boolean forceDelete) {
+        narManager.verifyDeleteNar(identifier, forceDelete);
+    }
+
+    @Override
+    public NarSummaryEntity deleteNar(final String identifier) throws IOException {
+        final NarNode narNode = narManager.deleteNar(identifier);
+        final NarSummaryDTO narSummaryDTO = dtoFactory.createNarSummaryDto(narNode);
+        return entityFactory.createNarSummaryEntity(narSummaryDTO);
+    }
+
+    @Override
+    public void verifyDeleteAsset(final String parameterContextId, final String assetId) {
+        final ParameterContext parameterContext = parameterContextDAO.getParameterContext(parameterContextId);
+        final Set<String> referencingParameterNames = getReferencingParameterNames(parameterContext, assetId);
+        if (!referencingParameterNames.isEmpty()) {
+            final String joinedParametersNames = String.join(", ", referencingParameterNames);
+            throw new IllegalStateException("Unable to delete Asset [%s] because it is currently references by Parameters [%s]".formatted(assetId, joinedParametersNames));
+        }
+    }
+
+    private Set<String> getReferencingParameterNames(final ParameterContext parameterContext, final String assetId) {
+        final Set<String> referencingParameterNames = new HashSet<>();
+        for (final Parameter parameter : parameterContext.getParameters().values()) {
+            if (parameter.getReferencedAssets() != null) {
+                for (final Asset asset : parameter.getReferencedAssets()) {
+                    if (asset.getIdentifier().equals(assetId)) {
+                        referencingParameterNames.add(parameter.getDescriptor().getName());
+                    }
+                }
+            }
+        }
+        return referencingParameterNames;
+    }
+
+    @Override
+    public AssetEntity deleteAsset(final String parameterContextId, final String assetId) {
+        verifyDeleteAsset(parameterContextId, assetId);
+        final Asset deletedAsset = assetManager.deleteAsset(assetId)
+                .orElseThrow(() -> new ResourceNotFoundException("Asset does not exist with id [%s]".formatted(assetId)));
+        return dtoFactory.createAssetEntity(deletedAsset);
+    }
+
     private PermissionsDTO createPermissionDto(
             final String id,
             final org.apache.nifi.flow.ComponentType subjectComponentType,
@@ -6681,136 +6955,180 @@ public class StandardNiFiServiceFacade implements NiFiServiceFacade {
         return new NiFiRegistryFlowMapper(extensionManager);
     }
 
-    /* setters */
+    @Autowired
     public void setProperties(final NiFiProperties properties) {
         this.properties = properties;
     }
 
+    @Autowired
     public void setControllerFacade(final ControllerFacade controllerFacade) {
         this.controllerFacade = controllerFacade;
     }
 
+    @Autowired
     public void setRemoteProcessGroupDAO(final RemoteProcessGroupDAO remoteProcessGroupDAO) {
         this.remoteProcessGroupDAO = remoteProcessGroupDAO;
     }
 
+    @Autowired
     public void setLabelDAO(final LabelDAO labelDAO) {
         this.labelDAO = labelDAO;
     }
 
+    @Autowired
     public void setFunnelDAO(final FunnelDAO funnelDAO) {
         this.funnelDAO = funnelDAO;
     }
 
+    @Autowired
     public void setSnippetDAO(final SnippetDAO snippetDAO) {
         this.snippetDAO = snippetDAO;
     }
 
+    @Autowired
     public void setProcessorDAO(final ProcessorDAO processorDAO) {
         this.processorDAO = processorDAO;
     }
 
+    @Autowired
     public void setConnectionDAO(final ConnectionDAO connectionDAO) {
         this.connectionDAO = connectionDAO;
     }
 
+    @Autowired
     public void setAuditService(final AuditService auditService) {
         this.auditService = auditService;
     }
 
+    @Autowired
     public void setRevisionManager(final RevisionManager revisionManager) {
         this.revisionManager = revisionManager;
     }
 
+    @Autowired
     public void setDtoFactory(final DtoFactory dtoFactory) {
         this.dtoFactory = dtoFactory;
     }
 
+    @Autowired
     public void setEntityFactory(final EntityFactory entityFactory) {
         this.entityFactory = entityFactory;
     }
 
+    @Qualifier("standardInputPortDAO")
+    @Autowired
     public void setInputPortDAO(final PortDAO inputPortDAO) {
         this.inputPortDAO = inputPortDAO;
     }
 
+    @Qualifier("standardOutputPortDAO")
+    @Autowired
     public void setOutputPortDAO(final PortDAO outputPortDAO) {
         this.outputPortDAO = outputPortDAO;
     }
 
+    @Autowired
     public void setProcessGroupDAO(final ProcessGroupDAO processGroupDAO) {
         this.processGroupDAO = processGroupDAO;
     }
 
+    @Autowired
     public void setControllerServiceDAO(final ControllerServiceDAO controllerServiceDAO) {
         this.controllerServiceDAO = controllerServiceDAO;
     }
 
+    @Autowired
     public void setReportingTaskDAO(final ReportingTaskDAO reportingTaskDAO) {
         this.reportingTaskDAO = reportingTaskDAO;
     }
 
+    @Autowired
     public void setFlowAnalysisRuleDAO(FlowAnalysisRuleDAO flowAnalysisRuleDAO) {
         this.flowAnalysisRuleDAO = flowAnalysisRuleDAO;
     }
 
+    @Autowired
     public void setParameterProviderDAO(final ParameterProviderDAO parameterProviderDAO) {
         this.parameterProviderDAO = parameterProviderDAO;
     }
 
+    @Autowired
     public void setParameterContextDAO(final ParameterContextDAO parameterContextDAO) {
         this.parameterContextDAO = parameterContextDAO;
     }
 
+    @Autowired
     public void setSnippetUtils(final SnippetUtils snippetUtils) {
         this.snippetUtils = snippetUtils;
     }
 
+    @Autowired
     public void setAuthorizableLookup(final AuthorizableLookup authorizableLookup) {
         this.authorizableLookup = authorizableLookup;
     }
 
+    @Autowired
     public void setAuthorizer(final Authorizer authorizer) {
         this.authorizer = authorizer;
     }
 
+    @Autowired
     public void setUserDAO(final UserDAO userDAO) {
         this.userDAO = userDAO;
     }
 
+    @Autowired
     public void setUserGroupDAO(final UserGroupDAO userGroupDAO) {
         this.userGroupDAO = userGroupDAO;
     }
 
+    @Autowired
     public void setAccessPolicyDAO(final AccessPolicyDAO accessPolicyDAO) {
         this.accessPolicyDAO = accessPolicyDAO;
     }
 
+    @Autowired
     public void setClusterCoordinator(final ClusterCoordinator coordinator) {
         this.clusterCoordinator = coordinator;
     }
 
+    @Autowired
     public void setHeartbeatMonitor(final HeartbeatMonitor heartbeatMonitor) {
         this.heartbeatMonitor = heartbeatMonitor;
     }
 
+    @Autowired
     public void setBulletinRepository(final BulletinRepository bulletinRepository) {
         this.bulletinRepository = bulletinRepository;
     }
 
+    @Autowired
     public void setLeaderElectionManager(final LeaderElectionManager leaderElectionManager) {
         this.leaderElectionManager = leaderElectionManager;
     }
 
+    @Autowired
     public void setFlowRegistryDAO(FlowRegistryDAO flowRegistryDao) {
         this.flowRegistryDAO = flowRegistryDao;
     }
 
+    @Autowired
     public void setRuleViolationsManager(RuleViolationsManager ruleViolationsManager) {
         this.ruleViolationsManager = ruleViolationsManager;
     }
 
+    @Autowired
     public void setParallelProcessingService(PredictionBasedParallelProcessingService parallelProcessingService) {
         this.parallelProcessingService = parallelProcessingService;
+    }
+
+    @Autowired
+    public void setNarManager(final NarManager narManager) {
+        this.narManager = narManager;
+    }
+
+    @Autowired
+    public void setAssetManager(final AssetManager assetManager) {
+        this.assetManager = assetManager;
     }
 }

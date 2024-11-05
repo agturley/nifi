@@ -63,10 +63,7 @@ import org.apache.nifi.components.state.StateManager;
 import org.apache.nifi.components.state.StateManagerProvider;
 import org.apache.nifi.components.state.StateMap;
 import org.apache.nifi.controller.leader.election.LeaderElectionManager;
-import org.apache.nifi.controller.state.manager.StandardStateManagerProvider;
 import org.apache.nifi.events.EventReporter;
-import org.apache.nifi.nar.ExtensionManager;
-import org.apache.nifi.parameter.ParameterLookup;
 import org.apache.nifi.reporting.Severity;
 import org.apache.nifi.services.FlowService;
 import org.apache.nifi.util.NiFiProperties;
@@ -76,6 +73,9 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.StringWriter;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -100,6 +100,7 @@ public class NodeClusterCoordinator implements ClusterCoordinator, ProtocolHandl
 
     private static final Logger logger = LoggerFactory.getLogger(NodeClusterCoordinator.class);
     private static final String EVENT_CATEGORY = "Clustering";
+    private static final Duration NODE_API_TIMEOUT = Duration.ofSeconds(10);
 
     private static final Pattern COUNTER_URI_PATTERN = Pattern.compile("/nifi-api/counters/[a-f0-9\\-]{36}");
 
@@ -127,16 +128,17 @@ public class NodeClusterCoordinator implements ClusterCoordinator, ProtocolHandl
 
     private final List<ClusterTopologyEventListener> eventListeners = new CopyOnWriteArrayList<>();
 
-    public NodeClusterCoordinator(final ClusterCoordinationProtocolSenderListener senderListener, final EventReporter eventReporter, final LeaderElectionManager leaderElectionManager,
-                                  final FlowElection flowElection, final ClusterNodeFirewall firewall, final RevisionManager revisionManager, final NiFiProperties nifiProperties,
-                                  final ExtensionManager extensionManager, final NodeProtocolSender nodeProtocolSender) throws IOException {
-        this(senderListener, eventReporter, leaderElectionManager, flowElection, firewall, revisionManager, nifiProperties, nodeProtocolSender,
-            StandardStateManagerProvider.create(nifiProperties, extensionManager, ParameterLookup.EMPTY));
-    }
-
-    public NodeClusterCoordinator(final ClusterCoordinationProtocolSenderListener senderListener, final EventReporter eventReporter, final LeaderElectionManager leaderElectionManager,
-            final FlowElection flowElection, final ClusterNodeFirewall firewall, final RevisionManager revisionManager, final NiFiProperties nifiProperties,
-            final NodeProtocolSender nodeProtocolSender, final StateManagerProvider stateManagerProvider) throws IOException {
+    public NodeClusterCoordinator(
+            final ClusterCoordinationProtocolSenderListener senderListener,
+            final EventReporter eventReporter,
+            final LeaderElectionManager leaderElectionManager,
+            final FlowElection flowElection,
+            final ClusterNodeFirewall firewall,
+            final RevisionManager revisionManager,
+            final NiFiProperties nifiProperties,
+            final NodeProtocolSender nodeProtocolSender,
+            final StateManagerProvider stateManagerProvider
+    ) throws IOException {
         this.senderListener = senderListener;
         this.flowService = null;
         this.eventReporter = eventReporter;
@@ -679,6 +681,21 @@ public class NodeClusterCoordinator implements ClusterCoordinator, ProtocolHandl
     }
 
     @Override
+    public boolean isApiReachable(final NodeIdentifier nodeId) {
+        final String apiAddress = nodeId.getApiAddress();
+        final int apiPort = nodeId.getApiPort();
+        try {
+            try (final Socket soc = new Socket()) {
+                soc.connect(new InetSocketAddress(apiAddress, apiPort), (int) NODE_API_TIMEOUT.toMillis());
+            }
+            return true;
+        } catch (final Exception e) {
+            logger.debug("Node is not reachable at API address {} and port {}", apiAddress, apiPort, e);
+            return false;
+        }
+    }
+
+    @Override
     public void reportEvent(final NodeIdentifier nodeId, final Severity severity, final String event) {
         eventReporter.reportEvent(severity, EVENT_CATEGORY, nodeId == null ? event : "Event Reported for " + nodeId + " -- " + event);
         if (nodeId != null) {
@@ -1084,7 +1101,7 @@ public class NodeClusterCoordinator implements ClusterCoordinator, ProtocolHandl
 
                         return;
                     } catch (final Exception e) {
-                        logger.warn("Problem encountered issuing reconnection request to node " + request.getNodeId(), e);
+                        logger.warn("Problem encountered issuing reconnection request to node {}", request.getNodeId(), e);
                         eventReporter.reportEvent(Severity.WARNING, EVENT_CATEGORY, "Problem encountered issuing reconnection request to node "
                                 + request.getNodeId() + " due to: " + e);
                     }
@@ -1255,7 +1272,7 @@ public class NodeClusterCoordinator implements ClusterCoordinator, ProtocolHandl
 
         if (isBlockedByFirewall(nodeIdentities)) {
             // if the socket address is not listed in the firewall, then return a null response
-            logger.info("Firewall blocked connection request from node " + nodeIdentifier + " with Node Identities " + nodeIdentities);
+            logger.info("Firewall blocked connection request from node {} with Node Identities {}", nodeIdentifier, nodeIdentities);
             final ConnectionResponse response = ConnectionResponse.createBlockedByFirewallResponse();
             final ConnectionResponseMessage responseMessage = new ConnectionResponseMessage();
             responseMessage.setConnectionResponse(response);
@@ -1389,7 +1406,7 @@ public class NodeClusterCoordinator implements ClusterCoordinator, ProtocolHandl
             // disconnect problematic nodes
             if (!problematicNodeResponses.isEmpty() && problematicNodeResponses.size() < nodeResponses.size()) {
                 final Set<NodeIdentifier> failedNodeIds = problematicNodeResponses.stream().map(response -> response.getNodeId()).collect(Collectors.toSet());
-                logger.warn(String.format("The following nodes failed to process URI %s '%s'.  Requesting each node reconnect to cluster.", uriPath, failedNodeIds));
+                logger.warn("The following nodes failed to process URI {} '{}'.  Requesting each node reconnect to cluster.", uriPath, failedNodeIds);
                 for (final NodeIdentifier nodeId : failedNodeIds) {
                     // Update the node to 'CONNECTING' status and request that the node connect
                     final NodeConnectionStatus reconnectionStatus = new NodeConnectionStatus(nodeId, NodeConnectionState.CONNECTING);

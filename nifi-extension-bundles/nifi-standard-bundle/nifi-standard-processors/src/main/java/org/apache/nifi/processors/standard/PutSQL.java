@@ -16,7 +16,6 @@
  */
 package org.apache.nifi.processors.standard;
 
-import java.util.Optional;
 import org.apache.nifi.annotation.behavior.InputRequirement;
 import org.apache.nifi.annotation.behavior.InputRequirement.Requirement;
 import org.apache.nifi.annotation.behavior.ReadsAttribute;
@@ -25,7 +24,6 @@ import org.apache.nifi.annotation.behavior.SupportsBatching;
 import org.apache.nifi.annotation.behavior.WritesAttribute;
 import org.apache.nifi.annotation.behavior.WritesAttributes;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
-import org.apache.nifi.annotation.documentation.SeeAlso;
 import org.apache.nifi.annotation.documentation.Tags;
 import org.apache.nifi.annotation.lifecycle.OnScheduled;
 import org.apache.nifi.components.PropertyDescriptor;
@@ -68,9 +66,9 @@ import java.util.BitSet;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
@@ -83,7 +81,6 @@ import static java.util.stream.Collectors.toList;
 import static org.apache.nifi.processor.util.pattern.ExceptionHandler.createOnError;
 
 @SupportsBatching
-@SeeAlso(ConvertJSONToSQL.class)
 @InputRequirement(Requirement.INPUT_REQUIRED)
 @Tags({"sql", "put", "rdbms", "database", "update", "insert", "relational"})
 @CapabilityDescription("Executes a SQL UPDATE or INSERT command. The content of an incoming FlowFile is expected to be the SQL command "
@@ -183,6 +180,17 @@ public class PutSQL extends AbstractSessionFactoryProcessor {
             .defaultValue("false")
             .build();
 
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(
+            CONNECTION_POOL,
+            SQL_STATEMENT,
+            SUPPORT_TRANSACTIONS,
+            AUTO_COMMIT,
+            TRANSACTION_TIMEOUT,
+            BATCH_SIZE,
+            OBTAIN_GENERATED_KEYS,
+            RollbackOnFailure.ROLLBACK_ON_FAILURE
+    );
+
     static final Relationship REL_SUCCESS = new Relationship.Builder()
             .name("success")
             .description("A FlowFile is routed to this relationship after the database is successfully updated")
@@ -197,6 +205,12 @@ public class PutSQL extends AbstractSessionFactoryProcessor {
                     + "such as an invalid query or an integrity constraint violation")
             .build();
 
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(
+            REL_SUCCESS,
+            REL_RETRY,
+            REL_FAILURE
+    );
+
     private static final String FRAGMENT_ID_ATTR = FragmentAttributes.FRAGMENT_ID.key();
     private static final String FRAGMENT_INDEX_ATTR = FragmentAttributes.FRAGMENT_INDEX.key();
     private static final String FRAGMENT_COUNT_ATTR = FragmentAttributes.FRAGMENT_COUNT.key();
@@ -207,16 +221,7 @@ public class PutSQL extends AbstractSessionFactoryProcessor {
 
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        final List<PropertyDescriptor> properties = new ArrayList<>();
-        properties.add(CONNECTION_POOL);
-        properties.add(SQL_STATEMENT);
-        properties.add(SUPPORT_TRANSACTIONS);
-        properties.add(AUTO_COMMIT);
-        properties.add(TRANSACTION_TIMEOUT);
-        properties.add(BATCH_SIZE);
-        properties.add(OBTAIN_GENERATED_KEYS);
-        properties.add(RollbackOnFailure.ROLLBACK_ON_FAILURE);
-        return properties;
+        return PROPERTIES;
     }
 
     @Override
@@ -249,11 +254,7 @@ public class PutSQL extends AbstractSessionFactoryProcessor {
 
     @Override
     public Set<Relationship> getRelationships() {
-        final Set<Relationship> rels = new HashSet<>();
-        rels.add(REL_SUCCESS);
-        rels.add(REL_RETRY);
-        rels.add(REL_FAILURE);
-        return rels;
+        return RELATIONSHIPS;
     }
 
     private static class FunctionContext extends RollbackOnFailure {
@@ -287,7 +288,7 @@ public class PutSQL extends AbstractSessionFactoryProcessor {
 
     private final PartialFunctions.InitConnection<FunctionContext, Connection> initConnection = (c, s, fc, ffs) -> {
         final Connection connection = c.getProperty(CONNECTION_POOL).asControllerService(DBCPService.class)
-                .getConnection(ffs == null || ffs.isEmpty() ? emptyMap() : ffs.get(0).getAttributes());
+                .getConnection(ffs == null || ffs.isEmpty() ? emptyMap() : ffs.getFirst().getAttributes());
         try {
             fc.originalAutoCommit = connection.getAutoCommit();
             final boolean autocommit = c.getProperty(AUTO_COMMIT).asBoolean();
@@ -339,7 +340,7 @@ public class PutSQL extends AbstractSessionFactoryProcessor {
 
             // Create a new PreparedStatement or reuse the one from the last group if that is the same.
             final StatementFlowFileEnclosure enclosure;
-            final StatementFlowFileEnclosure lastEnclosure = groups.isEmpty() ? null : groups.get(groups.size() - 1);
+            final StatementFlowFileEnclosure lastEnclosure = groups.isEmpty() ? null : groups.getLast();
 
             if (lastEnclosure == null || !lastEnclosure.getSql().equals(sql)) {
                 enclosure = new StatementFlowFileEnclosure(sql);
@@ -368,7 +369,7 @@ public class PutSQL extends AbstractSessionFactoryProcessor {
 
             // Create a new PreparedStatement or reuse the one from the last group if that is the same.
             final StatementFlowFileEnclosure enclosure;
-            final StatementFlowFileEnclosure lastEnclosure = groups.isEmpty() ? null : groups.get(groups.size() - 1);
+            final StatementFlowFileEnclosure lastEnclosure = groups.isEmpty() ? null : groups.getLast();
 
             if (lastEnclosure == null || !lastEnclosure.getSql().equals(sql)) {
                 enclosure = new StatementFlowFileEnclosure(sql);
@@ -454,7 +455,7 @@ public class PutSQL extends AbstractSessionFactoryProcessor {
             String url = "jdbc://unknown-host";
             try {
                 url = conn.getMetaData().getURL();
-            } catch (final SQLException sqle) {
+            } catch (final SQLException ignored) {
             }
 
             // Emit a Provenance SEND event
@@ -681,10 +682,10 @@ public class PutSQL extends AbstractSessionFactoryProcessor {
     /**
      * Pulls a batch of FlowFiles from the incoming queues. If no FlowFiles are available, returns <code>null</code>.
      * Otherwise, a List of FlowFiles will be returned.
-     *
+     * <p>
      * If all FlowFiles pulled are not eligible to be processed, the FlowFiles will be penalized and transferred back
      * to the input queue and an empty List will be returned.
-     *
+     * <p>
      * Otherwise, if the Support Fragmented Transactions property is true, all FlowFiles that belong to the same
      * transaction will be sorted in the order that they should be evaluated.
      *
@@ -778,8 +779,7 @@ public class PutSQL extends AbstractSessionFactoryProcessor {
         session.read(flowFile, in -> StreamUtils.fillBuffer(in, buffer));
 
         // Create the PreparedStatement to use for this FlowFile.
-        final String sql = new String(buffer, StandardCharsets.UTF_8);
-        return sql;
+        return new String(buffer, StandardCharsets.UTF_8);
     }
 
     /**
@@ -1094,11 +1094,10 @@ public class PutSQL extends AbstractSessionFactoryProcessor {
             if (obj == this) {
                 return false;
             }
-            if (!(obj instanceof StatementFlowFileEnclosure)) {
+            if (!(obj instanceof StatementFlowFileEnclosure other)) {
                 return false;
             }
 
-            final StatementFlowFileEnclosure other = (StatementFlowFileEnclosure) obj;
             return sql.equals(other.sql);
         }
     }

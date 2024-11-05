@@ -105,6 +105,9 @@ public enum CommandOption {
     // NiFi - Reporting Tasks
     RT_ID("rt", "reportingTaskId", "The id of a reporting task", true),
 
+    // NiFi - Flow Analysis Rules
+    FAR_ID("far", "flowAnalysisRuleId", "The id of a flow analysis rule", true),
+
     // NiFi - User/Group
     USER_NAME("un", "userName", "The name of a user", true),
     USER_ID("ui", "userIdentifier", "The identifier of a user", true),
@@ -145,6 +148,15 @@ public enum CommandOption {
     PARAM_VALUE("pv", "paramValue", "The value of a parameter", true),
     PARAM_SENSITIVE("ps", "paramSensitive", "Whether or not the parameter is sensitive (true/false)", true),
     UPDATE_TIMEOUT("ut", "updateTimeout", "Number of seconds after which a parameter context update will timeout (default: 60, maximum: 600)", true),
+
+    // NiFi - NARs
+    NAR_ID("nid", "narId", "", true),
+    NAR_FILE("nar", "narFile", "A NAR file to upload, must contain full path and filename", true, true),
+    NAR_UPLOAD_TIMEOUT("npt", "narProcessing", "Number of seconds after which a parameter context update will timeout (default: 60, maximum: 600)", true),
+
+    // NiFi - Assets
+    ASSET_FILE("af", "assetFile", "A file containing the asset content, must contain full path and filename", true, true),
+    ASSET_ID("aid", "assetId", "The id of an asset which can be referenced from a parameter", true, false),
 
     // Security related
     KEYSTORE("ks", "keystore", "A keystore to use for TLS/SSL connections", true),

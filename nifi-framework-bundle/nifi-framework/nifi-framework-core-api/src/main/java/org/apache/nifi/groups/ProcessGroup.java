@@ -18,7 +18,6 @@ package org.apache.nifi.groups;
 
 import org.apache.nifi.authorization.resource.ComponentAuthorizable;
 import org.apache.nifi.components.VersionedComponent;
-import org.apache.nifi.components.validation.ValidationStatus;
 import org.apache.nifi.connectable.Connectable;
 import org.apache.nifi.connectable.Connection;
 import org.apache.nifi.connectable.Funnel;
@@ -68,7 +67,7 @@ public interface ProcessGroup extends ComponentAuthorizable, Positionable, Versi
     /**
      * Predicate for starting eligible Processors.
      */
-    Predicate<ProcessorNode> START_PROCESSORS_FILTER = node -> !node.isRunning() && !ScheduledState.DISABLED.equals(node.getScheduledState()) && node.getValidationStatus() == ValidationStatus.VALID;
+    Predicate<ProcessorNode> START_PROCESSORS_FILTER = node -> !node.isRunning() && !ScheduledState.DISABLED.equals(node.getScheduledState());
 
     /**
      * Predicate for stopping eligible Processors.
@@ -1214,6 +1213,12 @@ public interface ProcessGroup extends ComponentAuthorizable, Positionable, Versi
      * @throws IllegalStateException if the Execution Engine cannot be set to the given value
      */
     void verifyCanSetExecutionEngine(ExecutionEngine executionEngine);
+
+    /**
+     * Verifies that the Process Group is in a state in which the Execution Engine can be changed.
+     * @throws IllegalStateException if the Execution Engine cannot be changed at this time
+     */
+    void verifyCanUpdateExecutionEngine();
 
     /**
      * Sets the maximum number on concurrent tasks that can be run in this Process Group if using the Stateless Execution Engine

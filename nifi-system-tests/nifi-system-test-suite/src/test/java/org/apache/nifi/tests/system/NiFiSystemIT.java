@@ -77,17 +77,19 @@ public abstract class NiFiSystemIT implements NiFiInstanceProvider {
     //                                                   Group ID  | Source Name | Dest Name | Conn Name  | Queue Size |
     private static final String QUEUE_SIZES_FORMAT = "| %1$-36.36s | %2$-30.30s | %3$-30.30s | %4$-30.30s | %5$-30.30s |";
 
-    public static final RequestConfig DO_NOT_REPLICATE = () -> Collections.singletonMap("X-Request-Replicated", "value");
+    public static final RequestConfig DO_NOT_REPLICATE = () -> Collections.singletonMap("request-replicated", Boolean.TRUE.toString());
 
     public static final int CLUSTERED_CLIENT_API_BASE_PORT = 5671;
     public static final int STANDALONE_CLIENT_API_BASE_PORT = 5670;
     public static final String NIFI_GROUP_ID = "org.apache.nifi";
     public static final String TEST_EXTENSIONS_ARTIFACT_ID = "nifi-system-test-extensions-nar";
+    public static final String TEST_EXTENSIONS_SERVICES_ARTIFACT_ID = "nifi-system-test-extensions-services-nar";
     public static final String TEST_PYTHON_EXTENSIONS_ARTIFACT_ID = "python-extensions";
     public static final String TEST_PARAM_PROVIDERS_PACKAGE = "org.apache.nifi.parameter.tests.system";
     public static final String TEST_PROCESSORS_PACKAGE = "org.apache.nifi.processors.tests.system";
     public static final String TEST_CS_PACKAGE = "org.apache.nifi.cs.tests.system";
     public static final String TEST_REPORTING_TASK_PACKAGE = "org.apache.nifi.reporting";
+    public static final String TEST_FLOW_ANALYSIS_RULE_PACKAGE = "org.apache.nifi.flowanalysis";
 
     private static final Pattern FRAMEWORK_NAR_PATTERN = Pattern.compile("nifi-framework-nar-(.*?)\\.nar");
     private static final File LIB_DIR = new File("target/nifi-lib-assembly/lib");
@@ -153,8 +155,17 @@ public abstract class NiFiSystemIT implements NiFiInstanceProvider {
         logger.info("Beginning teardown");
 
         try {
-            Exception destroyFlowFailure = null;
+            // In some cases a test can pass, but still leave a clustered instance with one of the nodes in a bad state, if the instance then gets reused
+            // it will cause later tests to fail, so it is better to destroy the environment if the cluster is in a bad state at the end of a test
+            final NiFiInstance nifiInstance = nifiRef.get();
+            if (nifiInstance != null && nifiInstance.isClustered() && (!isCoordinatorElected() || !allNodesConnected(nifiInstance.getNumberOfNodes()))) {
+                logger.info("Clustered environment is in a bad state, will completely tear down the environments and start with a clean environment for the next test.");
+                instanceCache.poison(nifiInstance);
+                cleanup();
+                return;
+            }
 
+            Exception destroyFlowFailure = null;
             if (isDestroyFlowAfterEachTest()) {
                 try {
                     destroyFlow();
@@ -242,10 +253,14 @@ public abstract class NiFiSystemIT implements NiFiInstanceProvider {
         getClientUtil().disableControllerServices("root", true);
         getClientUtil().stopReportingTasks();
         getClientUtil().disableControllerLevelServices();
+        getClientUtil().disableFlowAnalysisRules();
         getClientUtil().stopTransmitting("root");
         getClientUtil().deleteAll("root");
         getClientUtil().deleteControllerLevelServices();
         getClientUtil().deleteReportingTasks();
+        getClientUtil().deleteFlowAnalysisRules();
+        getClientUtil().deleteParameterContexts();
+        getClientUtil().deleteParameterProviders();
 
         logger.info("Finished destroyFlow");
     }
@@ -593,6 +608,11 @@ public abstract class NiFiSystemIT implements NiFiInstanceProvider {
         return false;
     }
 
+    protected boolean allNodesConnected(int expectedNodeCount) throws NiFiClientException, IOException {
+        final ClusterSummaryEntity clusterSummary = getNifiClient().getFlowClient().getClusterSummary();
+        return expectedNodeCount == clusterSummary.getClusterSummary().getConnectedNodeCount();
+    }
+
     protected void reconnectNode(final int nodeIndex) throws NiFiClientException, IOException {
         final NodeEntity nodeEntity = getNodeEntity(nodeIndex);
         nodeEntity.getNode().setStatus(NodeConnectionState.CONNECTING.name());
@@ -603,7 +623,9 @@ public abstract class NiFiSystemIT implements NiFiInstanceProvider {
         final ClusterEntity clusterEntity = getNifiClient().getControllerClient().getNodes();
         final int expectedPort = getClientApiPort() + nodeIndex - 1;
 
+        final List<Integer> nodePorts = new ArrayList<>();
         for (final NodeDTO nodeDto : clusterEntity.getCluster().getNodes()) {
+            nodePorts.add(nodeDto.getApiPort());
             if (nodeDto.getApiPort() == expectedPort) {
                 final NodeEntity nodeEntity = new NodeEntity();
                 nodeEntity.setNode(nodeDto);
@@ -611,7 +633,7 @@ public abstract class NiFiSystemIT implements NiFiInstanceProvider {
             }
         }
 
-        throw new IllegalStateException("Could not find node with API Port of " + expectedPort);
+        throw new IllegalStateException("Could not find node with API Port of " + expectedPort + "; found nodes: " + nodePorts);
     }
 
     protected void waitForNodeState(final int nodeIndex, final NodeConnectionState... nodeStates) throws InterruptedException {

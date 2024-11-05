@@ -16,16 +16,6 @@
  */
 package org.apache.nifi.processors.standard;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-
 import org.apache.commons.lang3.StringUtils;
 import org.apache.nifi.annotation.behavior.InputRequirement;
 import org.apache.nifi.annotation.behavior.InputRequirement.Requirement;
@@ -52,6 +42,13 @@ import org.apache.nifi.processor.ProcessSession;
 import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.util.StandardValidators;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Set;
 
 @SupportsBatching
 @Tags({"map", "cache", "put", "distributed"})
@@ -108,6 +105,12 @@ public class PutDistributedMapCache extends AbstractProcessor {
         .expressionLanguageSupported(ExpressionLanguageScope.NONE)
         .build();
 
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(
+            CACHE_ENTRY_IDENTIFIER,
+            DISTRIBUTED_CACHE_SERVICE,
+            CACHE_UPDATE_STRATEGY,
+            CACHE_ENTRY_MAX_BYTES
+    );
 
     public static final Relationship REL_SUCCESS = new Relationship.Builder()
         .name("success")
@@ -118,37 +121,28 @@ public class PutDistributedMapCache extends AbstractProcessor {
         .name("failure")
         .description("Any FlowFile that cannot be inserted into the cache will be routed to this relationship")
         .build();
-    private final Set<Relationship> relationships;
+
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(
+            REL_SUCCESS,
+            REL_FAILURE
+    );
 
     private final Serializer<String> keySerializer = new StringSerializer();
     private final Serializer<byte[]> valueSerializer = new CacheValueSerializer();
     private final Deserializer<byte[]> valueDeserializer = new CacheValueDeserializer();
 
-    public PutDistributedMapCache() {
-        final Set<Relationship> rels = new HashSet<>();
-        rels.add(REL_SUCCESS);
-        rels.add(REL_FAILURE);
-        relationships = Collections.unmodifiableSet(rels);
-    }
-
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        final List<PropertyDescriptor> descriptors = new ArrayList<>();
-        descriptors.add(CACHE_ENTRY_IDENTIFIER);
-        descriptors.add(DISTRIBUTED_CACHE_SERVICE);
-        descriptors.add(CACHE_UPDATE_STRATEGY);
-        descriptors.add(CACHE_ENTRY_MAX_BYTES);
-        return descriptors;
+        return PROPERTIES;
     }
 
     @Override
     public Set<Relationship> getRelationships() {
-        return relationships;
+        return RELATIONSHIPS;
     }
 
     @Override
     public void onTrigger(final ProcessContext context, final ProcessSession session) throws ProcessException {
-
         FlowFile flowFile = session.get();
         if (flowFile == null) {
             return;
@@ -161,7 +155,7 @@ public class PutDistributedMapCache extends AbstractProcessor {
 
         // if the computed value is null, or empty, we transfer the flow file to failure relationship
         if (StringUtils.isBlank(cacheKey)) {
-            logger.error("FlowFile {} has no attribute for given Cache Entry Identifier", new Object[] {flowFile});
+            logger.error("FlowFile {} has no attribute for given Cache Entry Identifier", flowFile);
             flowFile = session.penalize(flowFile);
             session.transfer(flowFile, REL_FAILURE);
             return;
@@ -177,13 +171,13 @@ public class PutDistributedMapCache extends AbstractProcessor {
 
             // too big flow file
             if (flowFileSize > maxCacheEntrySize) {
-                logger.warn("Flow file {} size {} exceeds the max cache entry size ({} B).", new Object[] {flowFile, flowFileSize, maxCacheEntrySize});
+                logger.warn("Flow file {} size {} exceeds the max cache entry size ({} B).", flowFile, flowFileSize, maxCacheEntrySize);
                 session.transfer(flowFile, REL_FAILURE);
                 return;
             }
 
             if (flowFileSize == 0) {
-                logger.warn("Flow file {} is empty, there is nothing to cache.", new Object[] {flowFile});
+                logger.warn("Flow file {} is empty, there is nothing to cache.", flowFile);
                 session.transfer(flowFile, REL_FAILURE);
                 return;
 
@@ -218,7 +212,7 @@ public class PutDistributedMapCache extends AbstractProcessor {
         } catch (final IOException e) {
             flowFile = session.penalize(flowFile);
             session.transfer(flowFile, REL_FAILURE);
-            logger.error("Unable to communicate with cache when processing {} due to {}", new Object[] {flowFile, e});
+            logger.error("Unable to communicate with cache when processing {}", flowFile, e);
         }
     }
 

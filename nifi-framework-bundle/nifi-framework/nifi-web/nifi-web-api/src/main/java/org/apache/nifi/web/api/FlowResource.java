@@ -16,6 +16,7 @@
  */
 package org.apache.nifi.web.api;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.prometheus.client.CollectorRegistry;
 import io.prometheus.client.exporter.common.TextFormat;
 import io.swagger.v3.oas.annotations.Operation;
@@ -26,6 +27,22 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.ServletContext;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.DefaultValue;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.HttpMethod;
+import jakarta.ws.rs.PUT;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
+import jakarta.ws.rs.core.Context;
+import jakarta.ws.rs.core.HttpHeaders;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.StreamingOutput;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.nifi.authorization.Authorizer;
 import org.apache.nifi.authorization.RequestAction;
@@ -34,7 +51,13 @@ import org.apache.nifi.authorization.resource.OperationAuthorizable;
 import org.apache.nifi.authorization.user.NiFiUser;
 import org.apache.nifi.authorization.user.NiFiUserUtils;
 import org.apache.nifi.bundle.Bundle;
+import org.apache.nifi.bundle.BundleCoordinate;
 import org.apache.nifi.bundle.BundleDetails;
+import org.apache.nifi.c2.protocol.component.api.ControllerServiceDefinition;
+import org.apache.nifi.c2.protocol.component.api.FlowAnalysisRuleDefinition;
+import org.apache.nifi.c2.protocol.component.api.ParameterProviderDefinition;
+import org.apache.nifi.c2.protocol.component.api.ProcessorDefinition;
+import org.apache.nifi.c2.protocol.component.api.ReportingTaskDefinition;
 import org.apache.nifi.cluster.coordination.ClusterCoordinator;
 import org.apache.nifi.cluster.coordination.node.NodeConnectionState;
 import org.apache.nifi.cluster.manager.NodeResponse;
@@ -49,7 +72,8 @@ import org.apache.nifi.flow.VersionedReportingTaskSnapshot;
 import org.apache.nifi.groups.ProcessGroup;
 import org.apache.nifi.nar.NarClassLoadersHolder;
 import org.apache.nifi.registry.client.NiFiRegistryException;
-import org.apache.nifi.util.NiFiProperties;
+import org.apache.nifi.registry.flow.FlowVersionLocation;
+import org.apache.nifi.ui.extension.contentviewer.ContentViewer;
 import org.apache.nifi.web.IllegalClusterResourceRequestException;
 import org.apache.nifi.web.NiFiServiceFacade;
 import org.apache.nifi.web.ResourceNotFoundException;
@@ -60,9 +84,13 @@ import org.apache.nifi.web.api.dto.BulletinBoardDTO;
 import org.apache.nifi.web.api.dto.BulletinQueryDTO;
 import org.apache.nifi.web.api.dto.ClusterDTO;
 import org.apache.nifi.web.api.dto.ClusterSummaryDTO;
+import org.apache.nifi.web.api.dto.ComponentDifferenceDTO;
+import org.apache.nifi.web.api.dto.ContentViewerDTO;
+import org.apache.nifi.web.api.dto.DifferenceDTO;
 import org.apache.nifi.web.api.dto.NodeDTO;
 import org.apache.nifi.web.api.dto.ProcessGroupDTO;
 import org.apache.nifi.web.api.dto.RevisionDTO;
+import org.apache.nifi.web.api.dto.SupportedMimeTypesDTO;
 import org.apache.nifi.web.api.dto.action.HistoryDTO;
 import org.apache.nifi.web.api.dto.action.HistoryQueryDTO;
 import org.apache.nifi.web.api.dto.flow.FlowDTO;
@@ -73,6 +101,7 @@ import org.apache.nifi.web.api.dto.status.ControllerStatusDTO;
 import org.apache.nifi.web.api.entity.AboutEntity;
 import org.apache.nifi.web.api.entity.ActionEntity;
 import org.apache.nifi.web.api.entity.ActivateControllerServicesEntity;
+import org.apache.nifi.web.api.entity.AdditionalDetailsEntity;
 import org.apache.nifi.web.api.entity.BannerEntity;
 import org.apache.nifi.web.api.entity.BulletinBoardEntity;
 import org.apache.nifi.web.api.entity.ClusterSearchResultsEntity;
@@ -80,6 +109,7 @@ import org.apache.nifi.web.api.entity.ClusterSummaryEntity;
 import org.apache.nifi.web.api.entity.ComponentHistoryEntity;
 import org.apache.nifi.web.api.entity.ConnectionStatisticsEntity;
 import org.apache.nifi.web.api.entity.ConnectionStatusEntity;
+import org.apache.nifi.web.api.entity.ContentViewerEntity;
 import org.apache.nifi.web.api.entity.ControllerBulletinsEntity;
 import org.apache.nifi.web.api.entity.ControllerServiceEntity;
 import org.apache.nifi.web.api.entity.ControllerServiceTypesEntity;
@@ -89,6 +119,7 @@ import org.apache.nifi.web.api.entity.CurrentUserEntity;
 import org.apache.nifi.web.api.entity.FlowAnalysisResultEntity;
 import org.apache.nifi.web.api.entity.FlowAnalysisRuleTypesEntity;
 import org.apache.nifi.web.api.entity.FlowBreadcrumbEntity;
+import org.apache.nifi.web.api.entity.FlowComparisonEntity;
 import org.apache.nifi.web.api.entity.FlowConfigurationEntity;
 import org.apache.nifi.web.api.entity.FlowRegistryBranchEntity;
 import org.apache.nifi.web.api.entity.FlowRegistryBranchesEntity;
@@ -130,22 +161,15 @@ import org.apache.nifi.web.api.request.FlowMetricsProducer;
 import org.apache.nifi.web.api.request.FlowMetricsRegistry;
 import org.apache.nifi.web.api.request.IntegerParameter;
 import org.apache.nifi.web.api.request.LongParameter;
+import org.apache.nifi.web.servlet.shared.RequestUriBuilder;
+import org.apache.nifi.web.util.PaginationHelper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Controller;
 
-import jakarta.ws.rs.Consumes;
-import jakarta.ws.rs.DefaultValue;
-import jakarta.ws.rs.GET;
-import jakarta.ws.rs.HttpMethod;
-import jakarta.ws.rs.PUT;
-import jakarta.ws.rs.Path;
-import jakarta.ws.rs.PathParam;
-import jakarta.ws.rs.Produces;
-import jakarta.ws.rs.QueryParam;
-import jakarta.ws.rs.WebApplicationException;
-import jakarta.ws.rs.core.HttpHeaders;
-import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
-import jakarta.ws.rs.core.StreamingOutput;
-
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.URI;
 import java.text.Collator;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
@@ -172,6 +196,7 @@ import static org.apache.nifi.web.api.entity.ScheduleComponentsEntity.STATE_ENAB
 /**
  * RESTful endpoint for managing a Flow.
  */
+@Controller
 @Path("/flow")
 @Tag(name = "Flow")
 public class FlowResource extends ApplicationResource {
@@ -180,6 +205,8 @@ public class FlowResource extends ApplicationResource {
 
     private static final String VERSIONED_REPORTING_TASK_SNAPSHOT_FILENAME_PATTERN = "VersionedReportingTaskSnapshot-%s.json";
     private static final String VERSIONED_REPORTING_TASK_SNAPSHOT_DATE_FORMAT = "yyyyMMddHHmmss";
+
+    private static final ObjectMapper objectMapper = new ObjectMapper();
 
     private NiFiServiceFacade serviceFacade;
     private Authorizer authorizer;
@@ -195,6 +222,9 @@ public class FlowResource extends ApplicationResource {
     private ControllerServiceResource controllerServiceResource;
     private ReportingTaskResource reportingTaskResource;
     private ParameterProviderResource parameterProviderResource;
+
+    @Context
+    private ServletContext servletContext;
 
     public FlowResource() {
         super();
@@ -314,6 +344,65 @@ public class FlowResource extends ApplicationResource {
     }
 
     /**
+     * Retrieves the registered content viewers.
+     *
+     * @return A contentViewerEntity.
+     */
+    @GET
+    @Consumes(MediaType.WILDCARD)
+    @Produces(MediaType.APPLICATION_JSON)
+    @Path("content-viewers")
+    @Operation(
+            summary = "Retrieves the registered content viewers",
+            responses = @ApiResponse(content = @Content(schema = @Schema(implementation = ContentViewerEntity.class))),
+            security = {
+                    @SecurityRequirement(name = "Read - /flow")
+            }
+    )
+    @ApiResponses(
+            value = {
+                    @ApiResponse(responseCode = "400", description = "NiFi was unable to complete the request because it was invalid. The request should not be retried without modification."),
+                    @ApiResponse(responseCode = "401", description = "Client could not be authenticated."),
+                    @ApiResponse(responseCode = "403", description = "Client is not authorized to make this request."),
+                    @ApiResponse(responseCode = "409", description = "The request was valid but NiFi was not in the appropriate state to process it.")
+            }
+    )
+    public Response getContentViewers(@Context final HttpServletRequest httpServletRequest) {
+        authorizeFlow();
+
+        final Collection<ContentViewer> contentViewers = (Collection<ContentViewer>) servletContext.getAttribute("content-viewers");
+
+        final List<ContentViewerDTO> dtos = new ArrayList<>();
+        contentViewers.forEach((contentViewer) -> {
+            final String contextPath = contentViewer.getContextPath();
+            final BundleCoordinate bundleCoordinate = contentViewer.getBundle().getBundleDetails().getCoordinate();
+
+            final String displayName = StringUtils.substringBefore(contextPath.substring(1), "-" + bundleCoordinate.getVersion());
+
+            final ContentViewerDTO dto = new ContentViewerDTO();
+            dto.setDisplayName(displayName + " " + bundleCoordinate.getVersion());
+
+            final List<SupportedMimeTypesDTO> supportedMimeTypes = contentViewer.getSupportedMimeTypes().stream().map((supportedMimeType -> {
+                final SupportedMimeTypesDTO mimeTypesDto = new SupportedMimeTypesDTO();
+                mimeTypesDto.setDisplayName(supportedMimeType.getDisplayName());
+                mimeTypesDto.setMimeTypes(supportedMimeType.getMimeTypes());
+                return mimeTypesDto;
+            })).collect(Collectors.toList());
+            dto.setSupportedMimeTypes(supportedMimeTypes);
+
+            final URI contentViewerUri = RequestUriBuilder.fromHttpServletRequest(httpServletRequest).path(contextPath).build();
+            dto.setUri(contentViewerUri.toString());
+
+            dtos.add(dto);
+        });
+
+        final ContentViewerEntity entity = new ContentViewerEntity();
+        entity.setContentViewers(dtos);
+
+        return generateOkResponse(entity).build();
+    }
+
+    /**
      * Retrieves the identity of the user making the request.
      *
      * @return An identityEntity
@@ -333,21 +422,39 @@ public class FlowResource extends ApplicationResource {
 
         authorizeFlow();
 
+        final CurrentUserEntity entity;
         if (isReplicateRequest()) {
-            return replicate(HttpMethod.GET);
+            try (Response replicatedResponse = replicate(HttpMethod.GET)) {
+                final CurrentUserEntity replicatedCurrentUserEntity = readReplicatedCurrentUserEntity(replicatedResponse);
+                final CurrentUserEntity currentUserEntity = serviceFacade.getCurrentUser();
+                // Set Logout Supported based on local client information instead of replicated and merged responses
+                replicatedCurrentUserEntity.setLogoutSupported(currentUserEntity.isLogoutSupported());
+                entity = replicatedCurrentUserEntity;
+            }
+        } else {
+            entity = serviceFacade.getCurrentUser();
         }
 
-        // note that the cluster manager will handle this request directly
-        final NiFiUser user = NiFiUserUtils.getNiFiUser();
-        if (user == null) {
-            throw new WebApplicationException(new Throwable("Unable to access details for current user."));
-        }
-
-        // create the response entity
-        final CurrentUserEntity entity = serviceFacade.getCurrentUser();
-
-        // generate the response
         return generateOkResponse(entity).build();
+    }
+
+    private CurrentUserEntity readReplicatedCurrentUserEntity(final Response replicatedResponse) {
+        final Object entity = replicatedResponse.getEntity();
+        if (entity instanceof CurrentUserEntity replicatedCurrentUserEntity) {
+            return replicatedCurrentUserEntity;
+        } else if (entity instanceof StreamingOutput streamingOutput) {
+            final ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            try {
+                streamingOutput.write(outputStream);
+
+                final byte[] bytes = outputStream.toByteArray();
+                return objectMapper.readValue(bytes, CurrentUserEntity.class);
+            } catch (final IOException e) {
+                throw new UncheckedIOException("Read Current User Entity failed", e);
+            }
+        } else {
+            throw new IllegalStateException("Current User Entity not expected [%s]".formatted(entity));
+        }
     }
 
     /**
@@ -844,7 +951,7 @@ public class FlowResource extends ApplicationResource {
             )
             @PathParam("id") String id,
             @Parameter(
-                    description = "The request to schedule or unschedule. If the comopnents in the request are not specified, all authorized components will be considered.",
+                    description = "The request to schedule or unschedule. If the components in the request are not specified, all authorized components will be considered.",
                     required = true
             ) final ScheduleComponentsEntity requestScheduleComponentsEntity) {
 
@@ -1365,7 +1472,7 @@ public class FlowResource extends ApplicationResource {
 
         authorizeFlow();
 
-        // get the banner from the properties - will come from the NCM when clustered
+        // get the banner from the properties
         final String bannerText = getProperties().getBannerText();
 
         // create the DTO
@@ -1603,6 +1710,344 @@ public class FlowResource extends ApplicationResource {
         return generateOkResponse(entity).build();
     }
 
+    @GET
+    @Consumes(MediaType.WILDCARD)
+    @Produces(MediaType.APPLICATION_JSON)
+    @Path("processor-definition/{group}/{artifact}/{version}/{type}")
+    @Operation(
+            summary = "Retrieves the Processor Definition for the specified component type.",
+            description = NON_GUARANTEED_ENDPOINT,
+            responses = @ApiResponse(content = @Content(schema = @Schema(implementation = ProcessorDefinition.class))),
+            security = {
+                    @SecurityRequirement(name = "Read - /flow")
+            }
+    )
+    @ApiResponses(
+            value = {
+                    @ApiResponse(responseCode = "400", description = "NiFi was unable to complete the request because it was invalid. The request should not be retried without modification."),
+                    @ApiResponse(responseCode = "401", description = "Client could not be authenticated."),
+                    @ApiResponse(responseCode = "403", description = "Client is not authorized to make this request."),
+                    @ApiResponse(responseCode = "404", description = "The processor definition for the coordinates could not be located.")
+            }
+    )
+    public Response getProcessorDefinition(
+            @Parameter(
+                    description = "The bundle group",
+                    required = true
+            )
+            @PathParam("group") String group,
+            @Parameter(
+                    description = "The bundle artifact",
+                    required = true
+            )
+            @PathParam("artifact") String artifact,
+            @Parameter(
+                    description = "The bundle version",
+                    required = true
+            )
+            @PathParam("version") String version,
+            @Parameter(
+                    description = "The processor type",
+                    required = true
+            )
+            @PathParam("type") String type
+    ) throws InterruptedException {
+
+        authorizeFlow();
+
+        if (isReplicateRequest()) {
+            return replicate(HttpMethod.GET);
+        }
+
+        // create response entity
+        final ProcessorDefinition entity = serviceFacade.getProcessorDefinition(group, artifact, version, type);
+
+        // generate the response
+        return generateOkResponse(entity).build();
+    }
+
+    @GET
+    @Consumes(MediaType.WILDCARD)
+    @Produces(MediaType.APPLICATION_JSON)
+    @Path("controller-service-definition/{group}/{artifact}/{version}/{type}")
+    @Operation(
+            summary = "Retrieves the Controller Service Definition for the specified component type.",
+            description = NON_GUARANTEED_ENDPOINT,
+            responses = @ApiResponse(content = @Content(schema = @Schema(implementation = ControllerServiceDefinition.class))),
+            security = {
+                    @SecurityRequirement(name = "Read - /flow")
+            }
+    )
+    @ApiResponses(
+            value = {
+                    @ApiResponse(responseCode = "400", description = "NiFi was unable to complete the request because it was invalid. The request should not be retried without modification."),
+                    @ApiResponse(responseCode = "401", description = "Client could not be authenticated."),
+                    @ApiResponse(responseCode = "403", description = "Client is not authorized to make this request."),
+                    @ApiResponse(responseCode = "404", description = "The controller service definition for the coordinates could not be located.")
+            }
+    )
+    public Response getControllerServiceDefinition(
+            @Parameter(
+                    description = "The bundle group",
+                    required = true
+            )
+            @PathParam("group") String group,
+            @Parameter(
+                    description = "The bundle artifact",
+                    required = true
+            )
+            @PathParam("artifact") String artifact,
+            @Parameter(
+                    description = "The bundle version",
+                    required = true
+            )
+            @PathParam("version") String version,
+            @Parameter(
+                    description = "The controller service type",
+                    required = true
+            )
+            @PathParam("type") String type
+    ) throws InterruptedException {
+
+        authorizeFlow();
+
+        if (isReplicateRequest()) {
+            return replicate(HttpMethod.GET);
+        }
+
+        // create response entity
+        final ControllerServiceDefinition entity = serviceFacade.getControllerServiceDefinition(group, artifact, version, type);
+
+        // generate the response
+        return generateOkResponse(entity).build();
+    }
+
+    @GET
+    @Consumes(MediaType.WILDCARD)
+    @Produces(MediaType.APPLICATION_JSON)
+    @Path("reporting-task-definition/{group}/{artifact}/{version}/{type}")
+    @Operation(
+            summary = "Retrieves the Reporting Task Definition for the specified component type.",
+            description = NON_GUARANTEED_ENDPOINT,
+            responses = @ApiResponse(content = @Content(schema = @Schema(implementation = ReportingTaskDefinition.class))),
+            security = {
+                    @SecurityRequirement(name = "Read - /flow")
+            }
+    )
+    @ApiResponses(
+            value = {
+                    @ApiResponse(responseCode = "400", description = "NiFi was unable to complete the request because it was invalid. The request should not be retried without modification."),
+                    @ApiResponse(responseCode = "401", description = "Client could not be authenticated."),
+                    @ApiResponse(responseCode = "403", description = "Client is not authorized to make this request."),
+                    @ApiResponse(responseCode = "404", description = "The reporting task definition for the coordinates could not be located.")
+            }
+    )
+    public Response getReportingTaskDefinition(
+            @Parameter(
+                    description = "The bundle group",
+                    required = true
+            )
+            @PathParam("group") String group,
+            @Parameter(
+                    description = "The bundle artifact",
+                    required = true
+            )
+            @PathParam("artifact") String artifact,
+            @Parameter(
+                    description = "The bundle version",
+                    required = true
+            )
+            @PathParam("version") String version,
+            @Parameter(
+                    description = "The reporting task type",
+                    required = true
+            )
+            @PathParam("type") String type
+    ) throws InterruptedException {
+
+        authorizeFlow();
+
+        if (isReplicateRequest()) {
+            return replicate(HttpMethod.GET);
+        }
+
+        // create response entity
+        final ReportingTaskDefinition entity = serviceFacade.getReportingTaskDefinition(group, artifact, version, type);
+
+        // generate the response
+        return generateOkResponse(entity).build();
+    }
+
+    @GET
+    @Consumes(MediaType.WILDCARD)
+    @Produces(MediaType.APPLICATION_JSON)
+    @Path("parameter-provider-definition/{group}/{artifact}/{version}/{type}")
+    @Operation(
+            summary = "Retrieves the Parameter Provider Definition for the specified component type.",
+            description = NON_GUARANTEED_ENDPOINT,
+            responses = @ApiResponse(content = @Content(schema = @Schema(implementation = ParameterProviderDefinition.class))),
+            security = {
+                    @SecurityRequirement(name = "Read - /flow")
+            }
+    )
+    @ApiResponses(
+            value = {
+                    @ApiResponse(responseCode = "400", description = "NiFi was unable to complete the request because it was invalid. The request should not be retried without modification."),
+                    @ApiResponse(responseCode = "401", description = "Client could not be authenticated."),
+                    @ApiResponse(responseCode = "403", description = "Client is not authorized to make this request."),
+                    @ApiResponse(responseCode = "404", description = "The reporting task definition for the coordinates could not be located.")
+            }
+    )
+    public Response getParameterProviderDefinition(
+            @Parameter(
+                    description = "The bundle group",
+                    required = true
+            )
+            @PathParam("group") String group,
+            @Parameter(
+                    description = "The bundle artifact",
+                    required = true
+            )
+            @PathParam("artifact") String artifact,
+            @Parameter(
+                    description = "The bundle version",
+                    required = true
+            )
+            @PathParam("version") String version,
+            @Parameter(
+                    description = "The parameter provider type",
+                    required = true
+            )
+            @PathParam("type") String type
+    ) throws InterruptedException {
+
+        authorizeFlow();
+
+        if (isReplicateRequest()) {
+            return replicate(HttpMethod.GET);
+        }
+
+        // create response entity
+        final ParameterProviderDefinition entity = serviceFacade.getParameterProviderDefinition(group, artifact, version, type);
+
+        // generate the response
+        return generateOkResponse(entity).build();
+    }
+
+    @GET
+    @Consumes(MediaType.WILDCARD)
+    @Produces(MediaType.APPLICATION_JSON)
+    @Path("flow-analysis-rule-definition/{group}/{artifact}/{version}/{type}")
+    @Operation(
+            summary = "Retrieves the Flow Analysis Rule Definition for the specified component type.",
+            description = NON_GUARANTEED_ENDPOINT,
+            responses = @ApiResponse(content = @Content(schema = @Schema(implementation = FlowAnalysisRuleDefinition.class))),
+            security = {
+                    @SecurityRequirement(name = "Read - /flow")
+            }
+    )
+    @ApiResponses(
+            value = {
+                    @ApiResponse(responseCode = "400", description = "NiFi was unable to complete the request because it was invalid. The request should not be retried without modification."),
+                    @ApiResponse(responseCode = "401", description = "Client could not be authenticated."),
+                    @ApiResponse(responseCode = "403", description = "Client is not authorized to make this request."),
+                    @ApiResponse(responseCode = "404", description = "The flow analysis rule definition for the coordinates could not be located.")
+            }
+    )
+    public Response getFlowAnalysisRuleDefinition(
+            @Parameter(
+                    description = "The bundle group",
+                    required = true
+            )
+            @PathParam("group") String group,
+            @Parameter(
+                    description = "The bundle artifact",
+                    required = true
+            )
+            @PathParam("artifact") String artifact,
+            @Parameter(
+                    description = "The bundle version",
+                    required = true
+            )
+            @PathParam("version") String version,
+            @Parameter(
+                    description = "The flow analysis rule type",
+                    required = true
+            )
+            @PathParam("type") String type
+    ) throws InterruptedException {
+
+        authorizeFlow();
+
+        if (isReplicateRequest()) {
+            return replicate(HttpMethod.GET);
+        }
+
+        // create response entity
+        final FlowAnalysisRuleDefinition entity = serviceFacade.getFlowAnalysisRuleDefinition(group, artifact, version, type);
+
+        // generate the response
+        return generateOkResponse(entity).build();
+    }
+
+    @GET
+    @Consumes(MediaType.WILDCARD)
+    @Produces(MediaType.APPLICATION_JSON)
+    @Path("additional-details/{group}/{artifact}/{version}/{type}")
+    @Operation(
+            summary = "Retrieves the additional details for the specified component type.",
+            description = NON_GUARANTEED_ENDPOINT,
+            responses = @ApiResponse(content = @Content(schema = @Schema(implementation = AdditionalDetailsEntity.class))),
+            security = {
+                    @SecurityRequirement(name = "Read - /flow")
+            }
+    )
+    @ApiResponses(
+            value = {
+                    @ApiResponse(responseCode = "400", description = "NiFi was unable to complete the request because it was invalid. The request should not be retried without modification."),
+                    @ApiResponse(responseCode = "401", description = "Client could not be authenticated."),
+                    @ApiResponse(responseCode = "403", description = "Client is not authorized to make this request."),
+                    @ApiResponse(responseCode = "404", description = "The additional details for the coordinates could not be located.")
+            }
+    )
+    public Response getAdditionalDetails(
+            @Parameter(
+                    description = "The bundle group",
+                    required = true
+            )
+            @PathParam("group") String group,
+            @Parameter(
+                    description = "The bundle artifact",
+                    required = true
+            )
+            @PathParam("artifact") String artifact,
+            @Parameter(
+                    description = "The bundle version",
+                    required = true
+            )
+            @PathParam("version") String version,
+            @Parameter(
+                    description = "The processor type",
+                    required = true
+            )
+            @PathParam("type") String type
+    ) throws InterruptedException {
+
+        authorizeFlow();
+
+        if (isReplicateRequest()) {
+            return replicate(HttpMethod.GET);
+        }
+
+        // create response entity
+        final String additionalDetails = serviceFacade.getAdditionalDetails(group, artifact, version, type);
+        final AdditionalDetailsEntity entity = new AdditionalDetailsEntity();
+        entity.setAdditionalDetails(additionalDetails);
+
+        // generate the response
+        return generateOkResponse(entity).build();
+    }
+
     /**
      * Retrieves the types of parameter providers that this NiFi supports.
      *
@@ -1776,7 +2221,7 @@ public class FlowResource extends ApplicationResource {
                     @ApiResponse(responseCode = "409", description = "The request was valid but NiFi was not in the appropriate state to process it.")
             }
     )
-    public Response getAboutInfo() {
+    public Response getAboutInfo(@Context final HttpServletRequest httpServletRequest) {
         authorizeFlow();
 
         // create the about dto
@@ -1785,9 +2230,8 @@ public class FlowResource extends ApplicationResource {
         aboutDTO.setUri(generateResourceUri());
         aboutDTO.setTimezone(new Date());
 
-        // get the content viewer url
-        final NiFiProperties properties = getProperties();
-        aboutDTO.setContentViewerUrl(properties.getProperty(NiFiProperties.CONTENT_VIEWER_URL));
+        final URI contentViewerUri = RequestUriBuilder.fromHttpServletRequest(httpServletRequest).path("/nifi/").fragment("/content-viewer").build();
+        aboutDTO.setContentViewerUrl(contentViewerUri.toString());
 
         final Bundle frameworkBundle = NarClassLoadersHolder.getInstance().getFrameworkBundle();
         if (frameworkBundle != null) {
@@ -1935,7 +2379,7 @@ public class FlowResource extends ApplicationResource {
             @Parameter(
                     description = "The name of a branch to get the buckets from. If not specified the default branch of the registry client will be used."
             )
-            @QueryParam("branch") String branch) throws NiFiRegistryException {
+            @QueryParam("branch") String branch) {
 
         authorizeFlow();
 
@@ -1990,11 +2434,16 @@ public class FlowResource extends ApplicationResource {
                     description = "The bucket id.",
                     required = true
             )
-            @PathParam("bucket-id") String bucketId) {
+            @PathParam("bucket-id") String bucketId,
+            @Parameter(
+                    description = "The name of a branch to get the flows from. If not specified the default branch of the registry client will be used."
+            )
+            @QueryParam("branch") String branch) {
 
         authorizeFlow();
 
-        final Set<VersionedFlowEntity> registeredFlows = serviceFacade.getFlowsForUser(registryId, bucketId);
+        final String selectedBranch = branch == null ? serviceFacade.getDefaultBranch(registryId).getBranch().getName() : branch;
+        final Set<VersionedFlowEntity> registeredFlows = serviceFacade.getFlowsForUser(registryId, selectedBranch, bucketId);
         final SortedSet<VersionedFlowEntity> sortedFlows = sortFlows(registeredFlows);
 
         final VersionedFlowsEntity versionedFlowsEntity = new VersionedFlowsEntity();
@@ -2049,12 +2498,111 @@ public class FlowResource extends ApplicationResource {
                     description = "The flow id.",
                     required = true
             )
-            @PathParam("flow-id") String flowId) {
+            @PathParam("flow-id") String flowId,
+            @Parameter(
+                    description = "The name of a branch to get the flow from. If not specified the default branch of the registry client will be used."
+            )
+            @QueryParam("branch") String branch) {
 
         authorizeFlow();
 
-        final VersionedFlowEntity flowDetails = serviceFacade.getFlowForUser(registryId, bucketId, flowId);
+        final String selectedBranch = branch == null ? serviceFacade.getDefaultBranch(registryId).getBranch().getName() : branch;
+        final VersionedFlowEntity flowDetails = serviceFacade.getFlowForUser(registryId, selectedBranch, bucketId, flowId);
         return generateOkResponse(flowDetails).build();
+    }
+
+    @GET
+    @Consumes(MediaType.WILDCARD)
+    @Produces(MediaType.APPLICATION_JSON)
+    @Path("registries/{registry-id}/branches/{branch-id-a}/buckets/{bucket-id-a}/flows/{flow-id-a}/{version-a}/diff/branches/{branch-id-b}/buckets/{bucket-id-b}/flows/{flow-id-b}/{version-b}")
+    @Operation(
+            summary = "Gets the differences between two versions of the same versioned flow, the basis of the comparison will be the first version",
+            responses = @ApiResponse(content = @Content(schema = @Schema(implementation = FlowComparisonEntity.class))),
+            security = {
+                    @SecurityRequirement(name = "Read - /flow")
+            }
+    )
+    @ApiResponses(
+            value = {
+                    @ApiResponse(responseCode = "400", description = "NiFi was unable to complete the request because it was invalid. The request should not be retried without modification."),
+                    @ApiResponse(responseCode = "401", description = "Client could not be authenticated."),
+                    @ApiResponse(responseCode = "403", description = "Client is not authorized to make this request."),
+                    @ApiResponse(responseCode = "404", description = "The specified resource could not be found."),
+                    @ApiResponse(responseCode = "409", description = "The request was valid but NiFi was not in the appropriate state to process it.")
+            }
+    )
+    public Response getVersionDifferences(
+            @Parameter(
+                    description = "The registry client id.",
+                    required = true
+            )
+            @PathParam("registry-id") String registryId,
+
+            @Parameter(
+                    description = "The branch id for the base version.",
+                    required = true
+            )
+            @PathParam("branch-id-a") String branchIdA,
+
+            @Parameter(
+                    description = "The bucket id for the base version.",
+                    required = true
+            )
+            @PathParam("bucket-id-a") String bucketIdA,
+
+            @Parameter(
+                    description = "The flow id for the base version.",
+                    required = true
+            )
+            @PathParam("flow-id-a") String flowIdA,
+
+            @Parameter(
+                    description = "The base version.",
+                    required = true
+            )
+            @PathParam("version-a") String versionA,
+
+            @Parameter(
+                    description = "The branch id for the compared version.",
+                    required = true
+            )
+            @PathParam("branch-id-b") String branchIdB,
+
+            @Parameter(
+                    description = "The bucket id for the compared version.",
+                    required = true
+            )
+            @PathParam("bucket-id-b") String bucketIdB,
+
+            @Parameter(
+                    description = "The flow id for the compared version.",
+                    required = true
+            )
+            @PathParam("flow-id-b") String flowIdB,
+
+            @Parameter(
+                    description = "The compared version.",
+                    required = true
+            )
+            @PathParam("version-b") String versionB,
+            @QueryParam("offset")
+            @Parameter(description = "Must be a non-negative number. Specifies the starting point of the listing. 0 means start from the beginning.")
+            @DefaultValue("0")
+            int offset,
+            @QueryParam("limit")
+            @Parameter(description = "Limits the number of differences listed. This might lead to partial result. 0 means no limitation is applied.")
+            @DefaultValue("1000")
+            int limit
+    ) {
+        authorizeFlow();
+        FlowVersionLocation baseVersionLocation = new FlowVersionLocation(branchIdA, bucketIdA, flowIdA, versionA);
+        FlowVersionLocation comparedVersionLocation = new FlowVersionLocation(branchIdB, bucketIdB, flowIdB, versionB);
+            final FlowComparisonEntity versionDifference = serviceFacade.getVersionDifference(registryId, baseVersionLocation, comparedVersionLocation);
+        // Note: with the current implementation, this is deterministic. However, the internal data structure used in comparison is set, thus
+        // later changes might cause discrepancies. Practical use of the endpoint usually remains within one "page" though.
+        return generateOkResponse(limitDifferences(versionDifference, offset, limit))
+                .type(MediaType.APPLICATION_JSON_TYPE)
+                .build();
     }
 
     @GET
@@ -2092,16 +2640,39 @@ public class FlowResource extends ApplicationResource {
                     description = "The flow id.",
                     required = true
             )
-            @PathParam("flow-id") String flowId) {
+            @PathParam("flow-id") String flowId,
+            @Parameter(
+                    description = "The name of a branch to get the flow versions from. If not specified the default branch of the registry client will be used."
+            )
+            @QueryParam("branch") String branch) {
 
         authorizeFlow();
 
-        final Set<VersionedFlowSnapshotMetadataEntity> registeredFlowSnapshotMetadataSet = serviceFacade.getFlowVersionsForUser(registryId, bucketId, flowId);
+        final String selectedBranch = branch == null ? serviceFacade.getDefaultBranch(registryId).getBranch().getName() : branch;
+        final Set<VersionedFlowSnapshotMetadataEntity> registeredFlowSnapshotMetadataSet = serviceFacade.getFlowVersionsForUser(registryId, selectedBranch, bucketId, flowId);
 
         final VersionedFlowSnapshotMetadataSetEntity versionedFlowSnapshotMetadataSetEntity = new VersionedFlowSnapshotMetadataSetEntity();
         versionedFlowSnapshotMetadataSetEntity.setVersionedFlowSnapshotMetadataSet(registeredFlowSnapshotMetadataSet);
 
         return generateOkResponse(versionedFlowSnapshotMetadataSetEntity).build();
+    }
+
+    private static FlowComparisonEntity limitDifferences(final FlowComparisonEntity original, final int offset, final int limit) {
+        final List<ComponentDifferenceDTO> limited = PaginationHelper.paginateByContainedItems(
+                original.getComponentDifferences(), offset, limit, ComponentDifferenceDTO::getDifferences, FlowResource::limitDifferences);
+        final FlowComparisonEntity result = new FlowComparisonEntity();
+        result.setComponentDifferences(new HashSet<>(limited));
+        return result;
+    }
+
+    private static ComponentDifferenceDTO limitDifferences(final ComponentDifferenceDTO original, final List<DifferenceDTO> partial) {
+        final ComponentDifferenceDTO result = new ComponentDifferenceDTO();
+        result.setComponentType(original.getComponentType());
+        result.setComponentId(original.getComponentId());
+        result.setComponentName(original.getComponentName());
+        result.setProcessGroupId(original.getProcessGroupId());
+        result.setDifferences(partial);
+        return result;
     }
 
     // --------------
@@ -3395,56 +3966,67 @@ public class FlowResource extends ApplicationResource {
         return noCache(Response.ok(results)).build();
     }
 
-    // setters
-
+    @Autowired
     public void setServiceFacade(NiFiServiceFacade serviceFacade) {
         this.serviceFacade = serviceFacade;
     }
 
+    @Autowired
     public void setProcessorResource(ProcessorResource processorResource) {
         this.processorResource = processorResource;
     }
 
+    @Autowired
     public void setInputPortResource(InputPortResource inputPortResource) {
         this.inputPortResource = inputPortResource;
     }
 
+    @Autowired
     public void setOutputPortResource(OutputPortResource outputPortResource) {
         this.outputPortResource = outputPortResource;
     }
 
+    @Autowired
     public void setFunnelResource(FunnelResource funnelResource) {
         this.funnelResource = funnelResource;
     }
 
+    @Autowired
     public void setLabelResource(LabelResource labelResource) {
         this.labelResource = labelResource;
     }
 
+    @Autowired
     public void setRemoteProcessGroupResource(RemoteProcessGroupResource remoteProcessGroupResource) {
         this.remoteProcessGroupResource = remoteProcessGroupResource;
     }
 
+    @Autowired
     public void setConnectionResource(ConnectionResource connectionResource) {
         this.connectionResource = connectionResource;
     }
 
+    @Autowired
     public void setProcessGroupResource(ProcessGroupResource processGroupResource) {
         this.processGroupResource = processGroupResource;
     }
 
+    @Autowired
     public void setControllerServiceResource(ControllerServiceResource controllerServiceResource) {
         this.controllerServiceResource = controllerServiceResource;
     }
 
+    @Autowired
     public void setReportingTaskResource(ReportingTaskResource reportingTaskResource) {
         this.reportingTaskResource = reportingTaskResource;
     }
 
+    @Autowired
     public void setParameterProviderResource(final ParameterProviderResource parameterProviderResource) {
         this.parameterProviderResource = parameterProviderResource;
     }
 
+    @Autowired
     public void setAuthorizer(Authorizer authorizer) {
         this.authorizer = authorizer;
     }

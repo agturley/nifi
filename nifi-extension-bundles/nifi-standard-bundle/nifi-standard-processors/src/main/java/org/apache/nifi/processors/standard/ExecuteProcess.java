@@ -53,7 +53,6 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -156,10 +155,22 @@ public class ExecuteProcess extends AbstractProcessor {
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .build();
 
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(
+            COMMAND,
+            COMMAND_ARGUMENTS,
+            BATCH_DURATION,
+            REDIRECT_ERROR_STREAM,
+            WORKING_DIR,
+            ARG_DELIMITER,
+            MIME_TYPE
+    );
+
     public static final Relationship REL_SUCCESS = new Relationship.Builder()
     .name("success")
     .description("All created FlowFiles are routed to this relationship")
     .build();
+
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(REL_SUCCESS);
 
     private volatile Process externalProcess;
 
@@ -170,20 +181,12 @@ public class ExecuteProcess extends AbstractProcessor {
 
     @Override
     public Set<Relationship> getRelationships() {
-        return Collections.singleton(REL_SUCCESS);
+        return RELATIONSHIPS;
     }
 
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        final List<PropertyDescriptor> properties = new ArrayList<>();
-        properties.add(COMMAND);
-        properties.add(COMMAND_ARGUMENTS);
-        properties.add(BATCH_DURATION);
-        properties.add(REDIRECT_ERROR_STREAM);
-        properties.add(WORKING_DIR);
-        properties.add(ARG_DELIMITER);
-        properties.add(MIME_TYPE);
-        return properties;
+        return PROPERTIES;
     }
 
     @Override
@@ -244,7 +247,7 @@ public class ExecuteProcess extends AbstractProcessor {
             try {
                 longRunningProcess = launchProcess(context, commandStrings, batchNanos, proxyOut);
             } catch (final IOException ioe) {
-                getLogger().error("Failed to create process due to {}", new Object[] {ioe});
+                getLogger().error("Failed to create process", ioe);
                 context.yield();
                 return;
             }
@@ -277,7 +280,7 @@ public class ExecuteProcess extends AbstractProcessor {
                         } catch (final InterruptedException ie) {
                             // Ignore
                         } catch (final ExecutionException ee) {
-                            getLogger().error("Process execution failed due to {}", new Object[] {ee.getCause()});
+                            getLogger().error("Process execution failed", ee.getCause());
                         }
                     } else {
                         // wait the allotted amount of time.
@@ -350,7 +353,7 @@ public class ExecuteProcess extends AbstractProcessor {
             builder.environment().putAll(environment);
         }
 
-        getLogger().info("Start creating new Process > {} ", new Object[] {commandStrings});
+        getLogger().info("Start creating new Process > {} ", commandStrings);
         this.externalProcess = builder.redirectErrorStream(redirectErrorStream).start();
 
         // Submit task to read error stream from process
@@ -423,7 +426,7 @@ public class ExecuteProcess extends AbstractProcessor {
                         // In the future consider exposing it via configuration.
                         boolean terminated = externalProcess.waitFor(1000, TimeUnit.MILLISECONDS);
                         int exitCode = terminated ? externalProcess.exitValue() : -9999;
-                        getLogger().info("Process finished with exit code {} ", new Object[] {exitCode});
+                        getLogger().info("Process finished with exit code {} ", exitCode);
                     } catch (InterruptedException e1) {
                         Thread.currentThread().interrupt();
                     }
@@ -454,7 +457,7 @@ public class ExecuteProcess extends AbstractProcessor {
         public void setDelegate(final OutputStream delegate) {
             lock.lock();
             try {
-                logger.trace("Switching delegate from {} to {}", new Object[]{this.delegate, delegate});
+                logger.trace("Switching delegate from {} to {}", this.delegate, delegate);
                 this.delegate = delegate;
             } finally {
                 lock.unlock();
@@ -475,7 +478,7 @@ public class ExecuteProcess extends AbstractProcessor {
             try {
                 while (true) {
                     if (delegate != null) {
-                        logger.trace("Writing to {}", new Object[]{delegate});
+                        logger.trace("Writing to {}", delegate);
 
                         delegate.write(b);
                         return;
@@ -496,7 +499,7 @@ public class ExecuteProcess extends AbstractProcessor {
             try {
                 while (true) {
                     if (delegate != null) {
-                        logger.trace("Writing to {}", new Object[]{delegate});
+                        logger.trace("Writing to {}", delegate);
                         delegate.write(b, off, len);
                         return;
                     } else {

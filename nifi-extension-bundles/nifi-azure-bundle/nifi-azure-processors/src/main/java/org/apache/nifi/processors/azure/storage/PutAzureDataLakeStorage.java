@@ -16,12 +16,14 @@
  */
 package org.apache.nifi.processors.azure.storage;
 
+import com.azure.core.util.Context;
 import com.azure.storage.file.datalake.DataLakeDirectoryClient;
 import com.azure.storage.file.datalake.DataLakeFileClient;
 import com.azure.storage.file.datalake.DataLakeFileSystemClient;
 import com.azure.storage.file.datalake.DataLakeServiceClient;
 import com.azure.storage.file.datalake.models.DataLakeRequestConditions;
 import com.azure.storage.file.datalake.models.DataLakeStorageException;
+import com.azure.storage.file.datalake.options.DataLakeFileFlushOptions;
 import org.apache.commons.io.input.BoundedInputStream;
 import org.apache.nifi.annotation.behavior.InputRequirement;
 import org.apache.nifi.annotation.behavior.InputRequirement.Requirement;
@@ -45,6 +47,7 @@ import org.apache.nifi.processors.transfer.ResourceTransferSource;
 import org.apache.nifi.util.StringUtils;
 
 import java.io.BufferedInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.HashMap;
 import java.util.List;
@@ -224,21 +227,18 @@ public class PutAzureDataLakeStorage extends AbstractAzureDataLakeStorageProcess
 
     private void uploadFile(final ProcessSession session, final FlowFile flowFile, final Optional<FileResource> fileResourceFound,
                             final long transferSize, final DataLakeFileClient fileClient) throws Exception {
-        if (transferSize > 0) {
-            try (final InputStream inputStream = new BufferedInputStream(
-                    fileResourceFound.map(FileResource::getInputStream)
-                            .orElseGet(() -> session.read(flowFile)))
-            ) {
-                uploadContent(fileClient, inputStream, transferSize);
-            } catch (final Exception e) {
-                removeFile(fileClient);
-                throw e;
-            }
+        try (final InputStream inputStream = new BufferedInputStream(
+                fileResourceFound.map(FileResource::getInputStream)
+                        .orElseGet(() -> session.read(flowFile)))
+        ) {
+            uploadContent(fileClient, inputStream, transferSize);
+        } catch (final Exception e) {
+            removeFile(fileClient);
+            throw e;
         }
     }
 
-    //Visible for testing
-    static void uploadContent(final DataLakeFileClient fileClient, final InputStream in, final long length) {
+    private static void uploadContent(final DataLakeFileClient fileClient, final InputStream in, final long length) throws IOException  {
         long chunkStart = 0;
         long chunkSize;
 
@@ -247,15 +247,17 @@ public class PutAzureDataLakeStorage extends AbstractAzureDataLakeStorageProcess
 
             // com.azure.storage.common.Utility.convertStreamToByteBuffer() throws an exception
             // if there are more available bytes in the stream after reading the chunk
-            BoundedInputStream boundedIn = new BoundedInputStream(in, chunkSize);
+            BoundedInputStream boundedIn = BoundedInputStream.builder()
+                    .setInputStream(in)
+                    .setMaxCount(chunkSize)
+                    .get();
 
             fileClient.append(boundedIn, chunkStart, chunkSize);
 
             chunkStart += chunkSize;
         }
 
-        // use overwrite mode due to https://github.com/Azure/azure-sdk-for-java/issues/31248
-        fileClient.flush(length, true);
+        fileClient.flushWithResponse(length, new DataLakeFileFlushOptions().setClose(true), null, Context.NONE);
     }
 
     /**
@@ -268,7 +270,7 @@ public class PutAzureDataLakeStorage extends AbstractAzureDataLakeStorageProcess
      * @return the file client of the uploaded file or {@code null} if the file already exists and conflict resolution strategy is 'ignore'
      * @throws ProcessException if the file already exists and the conflict resolution strategy is 'fail'; also in case of other errors
      */
-    DataLakeFileClient createFile(DataLakeDirectoryClient directoryClient, final String fileName, final String conflictResolution) {
+    private DataLakeFileClient createFile(DataLakeDirectoryClient directoryClient, final String fileName, final String conflictResolution) {
         final String destinationPath = createPath(directoryClient.getDirectoryPath(), fileName);
 
         try {

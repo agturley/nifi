@@ -82,7 +82,7 @@ public class CSVRecordLookupService extends AbstractCSVLookupService implements 
             try {
                 final ComponentLog logger = getLogger();
                 if (logger.isDebugEnabled()) {
-                    logger.debug("Loading lookup table from file: " + csvFile);
+                    logger.debug("Loading lookup table from file: {}", csvFile);
                 }
 
                 ConcurrentHashMap<String, Record> cache = new ConcurrentHashMap<>();
@@ -98,7 +98,7 @@ public class CSVRecordLookupService extends AbstractCSVLookupService implements 
                             } else if (!ignoreDuplicates && cache.containsKey(key)) {
                                 throw new IllegalStateException("Duplicate lookup key encountered: " + key + " in " + csvFile);
                             } else if (ignoreDuplicates && cache.containsKey(key)) {
-                                logger.warn("Duplicate lookup key encountered: {} in {}", new Object[]{key, csvFile});
+                                logger.warn("Duplicate lookup key encountered: {} in {}", key, csvFile);
                             }
 
                             // Put each key/value pair (except the lookup) into the properties
@@ -123,7 +123,7 @@ public class CSVRecordLookupService extends AbstractCSVLookupService implements 
                 this.cache = cache;
 
                 if (cache.isEmpty()) {
-                    logger.warn("Lookup table is empty after reading file: " + csvFile);
+                    logger.warn("Lookup table is empty after reading file: {}", csvFile);
                 }
             } finally {
                 lock.unlock();

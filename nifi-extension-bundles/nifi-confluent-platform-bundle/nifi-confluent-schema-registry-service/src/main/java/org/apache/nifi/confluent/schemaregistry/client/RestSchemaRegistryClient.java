@@ -25,7 +25,7 @@ import org.apache.nifi.logging.ComponentLog;
 import org.apache.nifi.schema.access.SchemaNotFoundException;
 import org.apache.nifi.serialization.record.RecordSchema;
 import org.apache.nifi.serialization.record.SchemaIdentifier;
-import org.apache.nifi.web.util.WebUtils;
+import org.apache.nifi.web.util.WebClientUtils;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 
@@ -86,7 +86,7 @@ public class RestSchemaRegistryClient implements SchemaRegistryClient {
         final ClientConfig clientConfig = new ClientConfig();
         clientConfig.property(ClientProperties.CONNECT_TIMEOUT, timeoutMillis);
         clientConfig.property(ClientProperties.READ_TIMEOUT, timeoutMillis);
-        client = WebUtils.createClient(clientConfig, sslContext);
+        client = WebClientUtils.createClient(clientConfig, sslContext);
 
         if (StringUtils.isNoneBlank(username, password)) {
             client.register(HttpAuthenticationFeature.basic(username, password));
@@ -144,14 +144,14 @@ public class RestSchemaRegistryClient implements SchemaRegistryClient {
                         completeSchema = postJsonResponse("/subjects/" + searchName, schemaJson, "schema id: " + schemaId);
                         break;
                     } catch (SchemaNotFoundException e) {
-                        logger.debug("Could not find schema in registry by subject name " + searchName, e);
+                        logger.debug("Could not find schema in registry by subject name {}", searchName, e);
                         continue;
                     }
                 }
             }
 
         } catch (SchemaNotFoundException e) {
-            logger.debug("Could not find schema metadata in registry by id and subjects in: " + schemaPath);
+            logger.debug("Could not find schema metadata in registry by id and subjects in: {}", schemaPath);
         }
 
         // Get all couples (subject name, version) for a given schema ID
@@ -179,7 +179,7 @@ public class RestSchemaRegistryClient implements SchemaRegistryClient {
                     }
                 }
             } catch (SchemaNotFoundException e) {
-                logger.debug("Could not find schema metadata in registry by id and versions in: " + schemaPath);
+                logger.debug("Could not find schema metadata in registry by id and versions in: {}", schemaPath);
             }
         }
 

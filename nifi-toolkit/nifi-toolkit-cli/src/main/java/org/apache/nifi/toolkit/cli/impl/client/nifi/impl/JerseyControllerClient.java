@@ -16,30 +16,49 @@
  */
 package org.apache.nifi.toolkit.cli.impl.client.nifi.impl;
 
+import jakarta.ws.rs.client.Entity;
+import jakarta.ws.rs.client.WebTarget;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.nifi.toolkit.cli.impl.client.nifi.ControllerClient;
 import org.apache.nifi.toolkit.cli.impl.client.nifi.NiFiClientException;
 import org.apache.nifi.toolkit.cli.impl.client.nifi.RequestConfig;
+import org.apache.nifi.web.api.dto.RevisionDTO;
 import org.apache.nifi.web.api.entity.ClusterEntity;
 import org.apache.nifi.web.api.entity.ControllerConfigurationEntity;
 import org.apache.nifi.web.api.entity.ControllerServiceEntity;
+import org.apache.nifi.web.api.entity.FlowAnalysisRuleEntity;
+import org.apache.nifi.web.api.entity.FlowAnalysisRuleRunStatusEntity;
+import org.apache.nifi.web.api.entity.FlowAnalysisRulesEntity;
 import org.apache.nifi.web.api.entity.FlowRegistryClientEntity;
 import org.apache.nifi.web.api.entity.FlowRegistryClientsEntity;
+import org.apache.nifi.web.api.entity.NarDetailsEntity;
+import org.apache.nifi.web.api.entity.NarSummariesEntity;
+import org.apache.nifi.web.api.entity.NarSummaryEntity;
 import org.apache.nifi.web.api.entity.NodeEntity;
 import org.apache.nifi.web.api.entity.ParameterProviderEntity;
+import org.apache.nifi.web.api.entity.PropertyDescriptorEntity;
 import org.apache.nifi.web.api.entity.ReportingTaskEntity;
+import org.apache.nifi.web.api.entity.VerifyConfigRequestEntity;
 import org.apache.nifi.web.api.entity.VersionedReportingTaskImportRequestEntity;
 import org.apache.nifi.web.api.entity.VersionedReportingTaskImportResponseEntity;
 
-import jakarta.ws.rs.client.Entity;
-import jakarta.ws.rs.client.WebTarget;
-import jakarta.ws.rs.core.MediaType;
+import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.util.Objects;
 
 /**
  * Jersey implementation of ControllerClient.
  */
 public class JerseyControllerClient extends AbstractJerseyClient implements ControllerClient {
+
+    private static final String NAR_MANAGER_PATH = "nar-manager";
+    private static final String NARS_PATH = NAR_MANAGER_PATH + "/nars";
+    private static final String NAR_UPLOAD_PATH = NARS_PATH + "/content";
 
     private final WebTarget controllerTarget;
 
@@ -247,6 +266,184 @@ public class JerseyControllerClient extends AbstractJerseyClient implements Cont
     }
 
     @Override
+    public FlowAnalysisRulesEntity getFlowAnalysisRules() throws NiFiClientException, IOException {
+        return executeAction("Error retrieving flow analysis rules", () -> {
+            final WebTarget target = controllerTarget.path("flow-analysis-rules");
+            return getRequestBuilder(target).get(FlowAnalysisRulesEntity.class);
+        });
+    }
+
+    @Override
+    public FlowAnalysisRuleEntity getFlowAnalysisRule(final String id) throws NiFiClientException, IOException {
+        if (StringUtils.isBlank(id)) {
+            throw new IllegalArgumentException("Flow analysis rule id cannot be null");
+        }
+
+        return executeAction("Error retrieving status of flow analysis rule", () -> {
+            final WebTarget target = controllerTarget.path("flow-analysis-rules/{id}").resolveTemplate("id", id);
+            return getRequestBuilder(target).get(FlowAnalysisRuleEntity.class);
+        });
+    }
+
+    @Override
+    public PropertyDescriptorEntity getFlowAnalysisRulePropertyDescriptor(final String componentId, final String propertyName, final Boolean sensitive) throws NiFiClientException, IOException {
+        Objects.requireNonNull(componentId, "Component ID required");
+        Objects.requireNonNull(propertyName, "Property Name required");
+
+        return executeAction("Error retrieving Flow Analysis Rule Property Descriptor", () -> {
+            final WebTarget target = controllerTarget
+                    .path("flow-analysis-rules/{id}/descriptors").resolveTemplate("id", componentId)
+                    .queryParam("propertyName", propertyName)
+                    .queryParam("sensitive", sensitive);
+
+            return getRequestBuilder(target).get(PropertyDescriptorEntity.class);
+        });
+    }
+
+    @Override
+    public FlowAnalysisRuleEntity createFlowAnalysisRule(FlowAnalysisRuleEntity flowAnalysisRule) throws NiFiClientException, IOException {
+        if (flowAnalysisRule == null) {
+            throw new IllegalArgumentException("Flow analysis rule entity cannot be null");
+        }
+
+        return executeAction("Error creating flow analysis rule", () -> {
+            final WebTarget target = controllerTarget.path("flow-analysis-rules");
+
+            return getRequestBuilder(target).post(
+                    Entity.entity(flowAnalysisRule, MediaType.APPLICATION_JSON),
+                    FlowAnalysisRuleEntity.class
+            );
+        });
+    }
+
+    @Override
+    public FlowAnalysisRuleEntity updateFlowAnalysisRule(final FlowAnalysisRuleEntity flowAnalysisRuleEntity) throws NiFiClientException, IOException {
+        if (flowAnalysisRuleEntity == null) {
+            throw new IllegalArgumentException("Flow Analysis Rule cannot be null");
+        }
+        if (flowAnalysisRuleEntity.getComponent() == null) {
+            throw new IllegalArgumentException("Component cannot be null");
+        }
+
+        return executeAction("Error updating Flow Analysis Rule", () -> {
+            final WebTarget target = controllerTarget.path("flow-analysis-rules/{id}").resolveTemplate("id", flowAnalysisRuleEntity.getId());
+            return getRequestBuilder(target).put(
+                    Entity.entity(flowAnalysisRuleEntity, MediaType.APPLICATION_JSON_TYPE),
+                    FlowAnalysisRuleEntity.class);
+        });
+    }
+
+    @Override
+    public FlowAnalysisRuleEntity activateFlowAnalysisRule(
+            final String id,
+            final FlowAnalysisRuleRunStatusEntity runStatusEntity
+    ) throws NiFiClientException, IOException {
+        if (StringUtils.isBlank(id)) {
+            throw new IllegalArgumentException("Flow analysis rule id cannot be null");
+        }
+
+        if (runStatusEntity == null) {
+            throw new IllegalArgumentException("Entity cannot be null");
+        }
+
+        return executeAction("Error enabling or disabling flow analysis rule", () -> {
+            final WebTarget target = controllerTarget
+                    .path("flow-analysis-rules/{id}/run-status").resolveTemplate("id", id);
+            return getRequestBuilder(target).put(
+                    Entity.entity(runStatusEntity, MediaType.APPLICATION_JSON_TYPE),
+                    FlowAnalysisRuleEntity.class
+            );
+        });
+    }
+
+    @Override
+    public FlowAnalysisRuleEntity deleteFlowAnalysisRule(final FlowAnalysisRuleEntity flowAnalysisRule) throws NiFiClientException, IOException {
+        if (flowAnalysisRule == null) {
+            throw new IllegalArgumentException("Flow Analysis Rule Entity cannot be null");
+        }
+        if (flowAnalysisRule.getId() == null) {
+            throw new IllegalArgumentException("Flow Analysis Rule ID cannot be null");
+        }
+
+        final RevisionDTO revision = flowAnalysisRule.getRevision();
+        if (revision == null) {
+            throw new IllegalArgumentException("Revision cannot be null");
+        }
+
+        return executeAction("Error deleting Flow Analysis Rule", () -> {
+            WebTarget target = controllerTarget
+                    .path("flow-analysis-rules/{id}").resolveTemplate("id", flowAnalysisRule.getId())
+                    .queryParam("version", revision.getVersion())
+                    .queryParam("clientId", revision.getClientId());
+
+            if (flowAnalysisRule.isDisconnectedNodeAcknowledged() == Boolean.TRUE) {
+                target = target.queryParam("disconnectedNodeAcknowledged", "true");
+            }
+
+            return getRequestBuilder(target).delete(FlowAnalysisRuleEntity.class);
+        });
+    }
+
+    @Override
+    public VerifyConfigRequestEntity submitFlowAnalysisRuleConfigVerificationRequest(final VerifyConfigRequestEntity configRequestEntity) throws NiFiClientException, IOException {
+        if (configRequestEntity == null) {
+            throw new IllegalArgumentException("Config Request Entity cannot be null");
+        }
+        if (configRequestEntity.getRequest() == null) {
+            throw new IllegalArgumentException("Config Request DTO cannot be null");
+        }
+        if (configRequestEntity.getRequest().getComponentId() == null) {
+            throw new IllegalArgumentException("Flow Analysis Rule ID cannot be null");
+        }
+        if (configRequestEntity.getRequest().getProperties() == null) {
+            throw new IllegalArgumentException("Flow Analysis Rule properties cannot be null");
+        }
+
+        return executeAction("Error submitting Flow Analysis Rule Config Verification Request", () -> {
+            final WebTarget target = controllerTarget
+                    .path("flow-analysis-rules/{id}/config/verification-requests")
+                    .resolveTemplate("id", configRequestEntity.getRequest().getComponentId());
+
+            return getRequestBuilder(target).post(
+                    Entity.entity(configRequestEntity, MediaType.APPLICATION_JSON_TYPE),
+                    VerifyConfigRequestEntity.class
+            );
+        });
+    }
+
+    @Override
+    public VerifyConfigRequestEntity getFlowAnalysisRuleConfigVerificationRequest(final String taskId, final String verificationRequestId) throws NiFiClientException, IOException {
+        if (verificationRequestId == null) {
+            throw new IllegalArgumentException("Verification Request ID cannot be null");
+        }
+
+        return executeAction("Error retrieving Flow Analysis Rule Config Verification Request", () -> {
+            final WebTarget target = controllerTarget
+                    .path("flow-analysis-rules/{id}/config/verification-requests/{requestId}")
+                    .resolveTemplate("id", taskId)
+                    .resolveTemplate("requestId", verificationRequestId);
+
+            return getRequestBuilder(target).get(VerifyConfigRequestEntity.class);
+        });
+    }
+
+    @Override
+    public VerifyConfigRequestEntity deleteFlowAnalysisRuleConfigVerificationRequest(final String taskId, final String verificationRequestId) throws NiFiClientException, IOException {
+        if (verificationRequestId == null) {
+            throw new IllegalArgumentException("Verification Request ID cannot be null");
+        }
+
+        return executeAction("Error deleting Flow Analysis Rule Config Verification Request", () -> {
+            final WebTarget target = controllerTarget
+                    .path("flow-analysis-rules/{id}/config/verification-requests/{requestId}")
+                    .resolveTemplate("id", taskId)
+                    .resolveTemplate("requestId", verificationRequestId);
+
+            return getRequestBuilder(target).delete(VerifyConfigRequestEntity.class);
+        });
+    }
+
+    @Override
     public ParameterProviderEntity createParamProvider(final ParameterProviderEntity paramProvider) throws NiFiClientException, IOException {
         if (paramProvider == null) {
             throw new IllegalArgumentException("Parameter provider cannot be null or blank");
@@ -287,6 +484,98 @@ public class JerseyControllerClient extends AbstractJerseyClient implements Cont
                     Entity.entity(controllerConfiguration, MediaType.APPLICATION_JSON),
                     ControllerConfigurationEntity.class
             );
+        });
+    }
+
+    @Override
+    public NarSummaryEntity uploadNar(final String filename, final InputStream narContentStream) throws NiFiClientException, IOException {
+        if (narContentStream == null) {
+            throw new IllegalArgumentException("NAR content stream is required");
+        }
+
+        return executeAction("Error uploading NAR", () -> {
+            final WebTarget target = controllerTarget.path(NAR_UPLOAD_PATH);
+            return getRequestBuilder(target)
+                    .header("Filename", filename)
+                    .post(
+                        Entity.entity(narContentStream, MediaType.APPLICATION_OCTET_STREAM_TYPE),
+                        NarSummaryEntity.class
+                    );
+        });
+    }
+
+    @Override
+    public NarSummariesEntity getNarSummaries() throws NiFiClientException, IOException {
+        return executeAction("Error retrieving NAR summaries", () -> {
+            final WebTarget target = controllerTarget.path(NARS_PATH);
+            return getRequestBuilder(target).get(NarSummariesEntity.class);
+        });
+    }
+
+    @Override
+    public NarSummaryEntity getNarSummary(final String identifier) throws NiFiClientException, IOException {
+        if (identifier == null) {
+            throw new IllegalArgumentException("Identifier is required");
+        }
+
+        return executeAction("Error getting NAR summary", () -> {
+            final WebTarget target = controllerTarget.path(NARS_PATH + "/{identifier}")
+                    .resolveTemplate("identifier", identifier);
+            return getRequestBuilder(target).get(NarSummaryEntity.class);
+        });
+    }
+
+    @Override
+    public NarSummaryEntity deleteNar(final String identifier, final boolean forceDelete) throws NiFiClientException, IOException {
+        if (identifier == null) {
+            throw new IllegalArgumentException("Identifier is required");
+        }
+
+        return executeAction("Error deleting NAR", () -> {
+            final WebTarget target = controllerTarget.path(NARS_PATH + "/{identifier}")
+                    .resolveTemplate("identifier", identifier)
+                    .queryParam("force", String.valueOf(forceDelete));
+            return getRequestBuilder(target).delete(NarSummaryEntity.class);
+        });
+    }
+
+    @Override
+    public NarDetailsEntity getNarDetails(final String identifier) throws NiFiClientException, IOException {
+        if (identifier == null) {
+            throw new IllegalArgumentException("Identifier is required");
+        }
+
+        return executeAction("Error getting NAR details", () -> {
+            final WebTarget target = controllerTarget.path(NARS_PATH + "/{identifier}/details")
+                    .resolveTemplate("identifier", identifier);
+            return getRequestBuilder(target).get(NarDetailsEntity.class);
+        });
+    }
+
+    @Override
+    public File downloadNar(final String identifier, final File outputDirectory) throws NiFiClientException, IOException {
+        if (identifier == null) {
+            throw new IllegalArgumentException("Identifier is required");
+        }
+        if (outputDirectory == null) {
+            throw new IllegalArgumentException("Output directory is required");
+        }
+
+        return executeAction("Error downloading NAR", () -> {
+            final WebTarget target = controllerTarget.path(NARS_PATH + "/{identifier}/content")
+                    .resolveTemplate("identifier", identifier);
+
+            final Response response = getRequestBuilder(target)
+                    .accept(MediaType.APPLICATION_OCTET_STREAM_TYPE)
+                    .get();
+
+            final String filename = getContentDispositionFilename(response);
+            final File narFile = new File(outputDirectory, filename);
+
+            try (final InputStream responseInputStream = response.readEntity(InputStream.class)) {
+                Files.copy(responseInputStream, narFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                return narFile;
+            }
         });
     }
 }

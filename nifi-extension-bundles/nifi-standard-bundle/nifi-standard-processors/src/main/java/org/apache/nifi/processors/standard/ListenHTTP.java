@@ -16,10 +16,14 @@
  */
 package org.apache.nifi.processors.standard;
 
+import jakarta.servlet.Servlet;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.ws.rs.Path;
 import org.apache.nifi.annotation.behavior.InputRequirement;
 import org.apache.nifi.annotation.behavior.InputRequirement.Requirement;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
 import org.apache.nifi.annotation.documentation.Tags;
+import org.apache.nifi.annotation.documentation.UseCase;
 import org.apache.nifi.annotation.lifecycle.OnScheduled;
 import org.apache.nifi.annotation.lifecycle.OnStopped;
 import org.apache.nifi.annotation.notification.OnPrimaryNodeStateChange;
@@ -52,21 +56,17 @@ import org.apache.nifi.ssl.RestrictedSSLContextService;
 import org.apache.nifi.ssl.SSLContextService;
 import org.apache.nifi.stream.io.LeakyBucketStreamThrottler;
 import org.apache.nifi.stream.io.StreamThrottler;
-import org.eclipse.jetty.server.Server;
-import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
 import org.eclipse.jetty.ee10.servlet.ServletHolder;
+import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
 
 import javax.net.ssl.SSLContext;
-import jakarta.servlet.Servlet;
-import jakarta.servlet.http.HttpServletResponse;
-import jakarta.ws.rs.Path;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -89,6 +89,20 @@ import java.util.regex.Pattern;
         + "For details see the documentation of the \"Listening Port for health check requests\" property."
         + "A Record Reader and Record Writer property can be enabled on the processor to process incoming requests as records. "
         + "Record processing is not allowed for multipart requests and request in FlowFileV3 format (minifi).")
+@UseCase(
+        description = "Unpack FlowFileV3 content received in a POST",
+        keywords = {"flowfile", "flowfilev3", "unpack"},
+        notes = """
+        POST requests with "Content-Type: application/flowfile-v3" will have their payload interpreted as FlowFileV3 format
+        and will be automatically unpacked. This will output the original FlowFile(s) from within the FlowFileV3 format and
+        will not require a separate UnpackContent processor.
+        """,
+        configuration = """
+        This feature of ListenHTTP is always on, no configuration required.
+
+        The MergeContent and PackageFlowFile processors can generate FlowFileV3 formatted data.
+        """
+)
 public class ListenHTTP extends AbstractSessionFactoryProcessor {
     private static final String MATCH_ALL = ".*";
 
@@ -118,11 +132,6 @@ public class ListenHTTP extends AbstractSessionFactoryProcessor {
             return new AllowableValue(name(), name(), description);
         }
     }
-
-    public static final Relationship RELATIONSHIP_SUCCESS = new Relationship.Builder()
-        .name("success")
-        .description("Relationship for successfully received FlowFiles")
-        .build();
 
     public static final PropertyDescriptor BASE_PATH = new PropertyDescriptor.Builder()
         .name("Base Path")
@@ -206,6 +215,13 @@ public class ListenHTTP extends AbstractSessionFactoryProcessor {
         .addValidator(StandardValidators.REGULAR_EXPRESSION_VALIDATOR)
         .required(false)
         .build();
+    public static final PropertyDescriptor REQUEST_HEADER_MAX_SIZE = new PropertyDescriptor.Builder()
+        .name("Request Header Maximum Size")
+        .description("The maximum supported size of HTTP headers in requests sent to this processor")
+        .required(true)
+        .addValidator(StandardValidators.DATA_SIZE_VALIDATOR)
+        .defaultValue("8 KB")
+        .build();
     public static final PropertyDescriptor RETURN_CODE = new PropertyDescriptor.Builder()
         .name("Return Code")
         .description("The HTTP return code returned after every HTTP call")
@@ -275,7 +291,7 @@ public class ListenHTTP extends AbstractSessionFactoryProcessor {
             .dependsOn(RECORD_READER)
             .build();
 
-    protected static final List<PropertyDescriptor> PROPERTIES = Collections.unmodifiableList(Arrays.asList(
+    protected static final List<PropertyDescriptor> PROPERTIES = List.of(
             BASE_PATH,
             PORT,
             HEALTH_CHECK_PORT,
@@ -287,17 +303,21 @@ public class ListenHTTP extends AbstractSessionFactoryProcessor {
             AUTHORIZED_ISSUER_DN_PATTERN,
             MAX_UNCONFIRMED_TIME,
             HEADERS_AS_ATTRIBUTES_REGEX,
+            REQUEST_HEADER_MAX_SIZE,
             RETURN_CODE,
             MULTIPART_REQUEST_MAX_SIZE,
             MULTIPART_READ_BUFFER_SIZE,
             MAX_THREAD_POOL_SIZE,
             RECORD_READER,
             RECORD_WRITER
-    ));
+    );
 
-    private static final Set<Relationship> RELATIONSHIPS = Collections.unmodifiableSet(new HashSet<>(Collections.singletonList(
-            RELATIONSHIP_SUCCESS
-    )));
+    public static final Relationship RELATIONSHIP_SUCCESS = new Relationship.Builder()
+            .name("success")
+            .description("Relationship for successfully received FlowFiles")
+            .build();
+
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(RELATIONSHIP_SUCCESS);
 
     public static final String CONTEXT_ATTRIBUTE_PROCESSOR = "processor";
     public static final String CONTEXT_ATTRIBUTE_LOGGER = "logger";
@@ -382,7 +402,7 @@ public class ListenHTTP extends AbstractSessionFactoryProcessor {
             toShutdown.destroy();
             clearInit();
         } catch (final Exception ex) {
-            getLogger().warn("unable to cleanly shutdown embedded server due to {}", new Object[] {ex});
+            getLogger().warn("unable to cleanly shutdown embedded server", ex);
             this.server = null;
         }
     }
@@ -397,9 +417,10 @@ public class ListenHTTP extends AbstractSessionFactoryProcessor {
         final Double maxBytesPerSecond = context.getProperty(MAX_DATA_RATE).asDataSize(DataUnit.B);
         final StreamThrottler streamThrottler = (maxBytesPerSecond == null) ? null : new LeakyBucketStreamThrottler(maxBytesPerSecond.intValue());
         final int returnCode = context.getProperty(RETURN_CODE).asInteger();
-        long requestMaxSize = context.getProperty(MULTIPART_REQUEST_MAX_SIZE).asDataSize(DataUnit.B).longValue();
-        int readBufferSize = context.getProperty(MULTIPART_READ_BUFFER_SIZE).asDataSize(DataUnit.B).intValue();
-        int maxThreadPoolSize = context.getProperty(MAX_THREAD_POOL_SIZE).asInteger();
+        final long requestMaxSize = context.getProperty(MULTIPART_REQUEST_MAX_SIZE).asDataSize(DataUnit.B).longValue();
+        final int readBufferSize = context.getProperty(MULTIPART_READ_BUFFER_SIZE).asDataSize(DataUnit.B).intValue();
+        final int maxThreadPoolSize = context.getProperty(MAX_THREAD_POOL_SIZE).asInteger();
+        final int requestHeaderSize = context.getProperty(REQUEST_HEADER_MAX_SIZE).asDataSize(DataUnit.B).intValue();
         throttlerRef.set(streamThrottler);
 
         final PropertyValue clientAuthenticationProperty = context.getProperty(CLIENT_AUTHENTICATION);
@@ -417,6 +438,7 @@ public class ListenHTTP extends AbstractSessionFactoryProcessor {
         final HttpProtocolStrategy httpProtocolStrategy = context.getProperty(HTTP_PROTOCOL_STRATEGY).asAllowableValue(HttpProtocolStrategy.class);
         final ServerConnector connector = createServerConnector(server,
                 port,
+                requestHeaderSize,
                 sslContextService,
                 clientAuthentication,
                 httpProtocolStrategy
@@ -428,6 +450,7 @@ public class ListenHTTP extends AbstractSessionFactoryProcessor {
         if (healthCheckPort != null) {
             final ServerConnector healthCheckConnector = createServerConnector(server,
                     healthCheckPort,
+                    requestHeaderSize,
                     sslContextService,
                     ClientAuthentication.NONE,
                     httpProtocolStrategy
@@ -506,11 +529,14 @@ public class ListenHTTP extends AbstractSessionFactoryProcessor {
 
     private ServerConnector createServerConnector(final Server server,
                                                   final int port,
+                                                  final int requestMaxHeaderSize,
                                                   final SSLContextService sslContextService,
                                                   final ClientAuthentication clientAuthentication,
                                                   final HttpProtocolStrategy httpProtocolStrategy
     ) {
         final StandardServerConnectorFactory serverConnectorFactory = new StandardServerConnectorFactory(server, port);
+        serverConnectorFactory.setRequestHeaderSize(requestMaxHeaderSize);
+
         final SSLContext sslContext = sslContextService == null ? null : sslContextService.createContext();
         serverConnectorFactory.setSslContext(sslContext);
 
@@ -533,13 +559,9 @@ public class ListenHTTP extends AbstractSessionFactoryProcessor {
     }
 
     protected Set<Class<? extends Servlet>> getServerClasses() {
-        final Set<Class<? extends Servlet>> s = new HashSet<>();
         // NOTE: Servlets added below MUST have a Path annotation
         // any servlets other than ListenHTTPServlet must have a Path annotation start with /
-        s.add(ListenHTTPServlet.class);
-        s.add(ContentAcknowledgmentServlet.class);
-        s.add(HealthCheckServlet.class);
-        return s;
+        return Set.of(ListenHTTPServlet.class, ContentAcknowledgmentServlet.class, HealthCheckServlet.class);
     }
 
     private Set<String> findOldFlowFileIds(final ProcessContext ctx) {
@@ -564,7 +586,7 @@ public class ListenHTTP extends AbstractSessionFactoryProcessor {
                 createHttpServerFromService(context);
             }
         } catch (Exception e) {
-            getLogger().warn("Failed to start http server during initialization: " + e);
+            getLogger().warn("Failed to start http server during initialization", e);
             context.yield();
             throw new ProcessException("Failed to initialize the server", e);
         }

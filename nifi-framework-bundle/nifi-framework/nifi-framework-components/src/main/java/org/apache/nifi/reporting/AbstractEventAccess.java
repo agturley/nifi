@@ -40,6 +40,7 @@ import org.apache.nifi.controller.status.ConnectionStatus;
 import org.apache.nifi.controller.status.LoadBalanceStatus;
 import org.apache.nifi.controller.status.PortStatus;
 import org.apache.nifi.controller.status.ProcessGroupStatus;
+import org.apache.nifi.controller.status.ProcessingPerformanceStatus;
 import org.apache.nifi.controller.status.ProcessorStatus;
 import org.apache.nifi.controller.status.RemoteProcessGroupStatus;
 import org.apache.nifi.controller.status.RunStatus;
@@ -72,6 +73,9 @@ import java.util.function.Predicate;
 public abstract class AbstractEventAccess implements EventAccess {
     private static final Logger logger = LoggerFactory.getLogger(AbstractEventAccess.class);
 
+    private static final Predicate<Authorizable> AUTHORIZATION_APPROVED = authorizable -> true;
+    private static final Predicate<Authorizable> AUTHORIZATION_DENIED = authorizable -> false;
+
     private final ProcessScheduler processScheduler;
     private final StatusAnalyticsEngine statusAnalyticsEngine;
     private final FlowManager flowManager;
@@ -96,7 +100,7 @@ public abstract class AbstractEventAccess implements EventAccess {
     public ProcessGroupStatus getGroupStatus(final String groupId) {
         final RepositoryStatusReport statusReport = generateRepositoryStatusReport();
         final ProcessGroup group = flowManager.getGroup(groupId);
-        return getGroupStatus(group, statusReport, authorizable -> true, Integer.MAX_VALUE, 1, true);
+        return getGroupStatus(group, statusReport, AUTHORIZATION_APPROVED, Integer.MAX_VALUE, 1, true);
     }
 
     /**
@@ -112,7 +116,7 @@ public abstract class AbstractEventAccess implements EventAccess {
         final ProcessGroup group = flowManager.getGroup(groupId);
 
         // this was invoked with no user context so the results will be unfiltered... necessary for aggregating status history
-        return getGroupStatus(group, statusReport, authorizable -> true, Integer.MAX_VALUE, 1, false);
+        return getGroupStatus(group, statusReport, AUTHORIZATION_APPROVED, Integer.MAX_VALUE, 1, false);
     }
 
     protected RepositoryStatusReport generateRepositoryStatusReport() {
@@ -127,13 +131,13 @@ public abstract class AbstractEventAccess implements EventAccess {
      *
      * @param group group id
      * @param statusReport report
-     * @param isAuthorized is authorized check
+     * @param checkAuthorization is authorized check
      * @param recursiveStatusDepth the number of levels deep we should recurse and still include the the processors' statuses, the groups' statuses, etc. in the returned ProcessGroupStatus
      * @param currentDepth the current number of levels deep that we have recursed
      * @param includeConnectionDetails whether or not to include the details of the connections that may be expensive to calculate and/or require locks be obtained
      * @return the component status
      */
-    ProcessGroupStatus getGroupStatus(final ProcessGroup group, final RepositoryStatusReport statusReport, final Predicate<Authorizable> isAuthorized,
+    ProcessGroupStatus getGroupStatus(final ProcessGroup group, final RepositoryStatusReport statusReport, final Predicate<Authorizable> checkAuthorization,
                                       final int recursiveStatusDepth, final int currentDepth, final boolean includeConnectionDetails) {
         if (group == null) {
             return null;
@@ -141,7 +145,7 @@ public abstract class AbstractEventAccess implements EventAccess {
 
         final ProcessGroupStatus status = new ProcessGroupStatus();
         status.setId(group.getIdentifier());
-        status.setName(isAuthorized.test(group) ? group.getName() : group.getIdentifier());
+        status.setName(checkAuthorization.test(group) ? group.getName() : group.getIdentifier());
         int activeGroupThreads = 0;
         int terminatedGroupThreads = 0;
         long bytesRead = 0L;
@@ -159,8 +163,18 @@ public abstract class AbstractEventAccess implements EventAccess {
         int flowFilesTransferred = 0;
         long bytesTransferred = 0;
         long processingNanos = 0;
+        final ProcessingPerformanceStatus performanceStatus = new ProcessingPerformanceStatus();
+        performanceStatus.setIdentifier(group.getIdentifier());
 
         final boolean populateChildStatuses = currentDepth <= recursiveStatusDepth;
+
+        // Set Authorization predicate based on whether to populate child component status avoiding unnecessary calls to Authorizer
+        final Predicate<Authorizable> isAuthorized;
+        if (populateChildStatuses) {
+            isAuthorized = checkAuthorization;
+        } else {
+            isAuthorized = AUTHORIZATION_DENIED;
+        }
 
         // set status for processors
         final Collection<ProcessorStatus> processorStatusCollection = new ArrayList<>();
@@ -181,6 +195,16 @@ public abstract class AbstractEventAccess implements EventAccess {
             bytesSent += procStat.getBytesSent();
 
             processingNanos += procStat.getProcessingNanos();
+
+            final ProcessingPerformanceStatus processorPerformanceStatus = procStat.getProcessingPerformanceStatus();
+
+            if (processorPerformanceStatus != null) {
+                performanceStatus.setCpuDuration(performanceStatus.getCpuDuration() + processorPerformanceStatus.getCpuDuration());
+                performanceStatus.setContentReadDuration(performanceStatus.getContentReadDuration() + processorPerformanceStatus.getContentReadDuration());
+                performanceStatus.setContentWriteDuration(performanceStatus.getContentWriteDuration() + processorPerformanceStatus.getContentWriteDuration());
+                performanceStatus.setSessionCommitDuration(performanceStatus.getSessionCommitDuration() + processorPerformanceStatus.getSessionCommitDuration());
+                performanceStatus.setGarbageCollectionDuration(performanceStatus.getGarbageCollectionDuration() + processorPerformanceStatus.getGarbageCollectionDuration());
+            }
         }
 
         // set status for local child groups
@@ -196,7 +220,7 @@ public abstract class AbstractEventAccess implements EventAccess {
                 // avoid performing any sort of authorizations. Because we only care about the numbers that come back, we can just indicate
                 // that the user is not authorized. This allows us to avoid the expense of both performing the authorization and calculating
                 // things that we would otherwise need to calculate if the user were in fact authorized.
-                childGroupStatus = getGroupStatus(childGroup, statusReport, authorizable -> false, recursiveStatusDepth, currentDepth + 1, includeConnectionDetails);
+                childGroupStatus = getGroupStatus(childGroup, statusReport, AUTHORIZATION_DENIED, recursiveStatusDepth, currentDepth + 1, includeConnectionDetails);
             }
 
             activeGroupThreads += childGroupStatus.getActiveThreadCount();
@@ -215,6 +239,16 @@ public abstract class AbstractEventAccess implements EventAccess {
             bytesTransferred += childGroupStatus.getBytesTransferred();
 
             processingNanos += childGroupStatus.getProcessingNanos();
+
+            final ProcessingPerformanceStatus childGroupPerformanceStatus = childGroupStatus.getProcessingPerformanceStatus();
+
+            if (childGroupPerformanceStatus != null) {
+                performanceStatus.setCpuDuration(performanceStatus.getCpuDuration() + childGroupPerformanceStatus.getCpuDuration());
+                performanceStatus.setContentReadDuration(performanceStatus.getContentReadDuration() + childGroupPerformanceStatus.getContentReadDuration());
+                performanceStatus.setContentWriteDuration(performanceStatus.getContentWriteDuration() + childGroupPerformanceStatus.getContentWriteDuration());
+                performanceStatus.setSessionCommitDuration(performanceStatus.getSessionCommitDuration() + childGroupPerformanceStatus.getSessionCommitDuration());
+                performanceStatus.setGarbageCollectionDuration(performanceStatus.getGarbageCollectionDuration() + childGroupPerformanceStatus.getGarbageCollectionDuration());
+            }
         }
 
         // set status for remote child groups
@@ -502,6 +536,7 @@ public abstract class AbstractEventAccess implements EventAccess {
         status.setFlowFilesTransferred(flowFilesTransferred);
         status.setBytesTransferred(bytesTransferred);
         status.setProcessingNanos(processingNanos);
+        status.setProcessingPerformanceStatus(performanceStatus);
 
         final VersionControlInformation vci = group.getVersionControlInformation();
         if (vci != null) {
@@ -649,6 +684,9 @@ public abstract class AbstractEventAccess implements EventAccess {
             if (isProcessorAuthorized) {
                 status.setCounters(flowFileEvent.getCounters());
             }
+
+            final ProcessingPerformanceStatus performanceStatus = PerformanceMetricsUtil.getPerformanceMetrics(flowFileEvent, procNode);
+            status.setProcessingPerformanceStatus(performanceStatus);
         }
 
         // Determine the run status and get any validation error... only validating while STOPPED
@@ -686,7 +724,7 @@ public abstract class AbstractEventAccess implements EventAccess {
         final ProcessGroup group = flowManager.getGroup(rootGroupId);
         final RepositoryStatusReport statusReport = generateRepositoryStatusReport();
 
-        return getGroupStatus(group, statusReport, authorizable -> true, Integer.MAX_VALUE, 1, true);
+        return getGroupStatus(group, statusReport, AUTHORIZATION_APPROVED, Integer.MAX_VALUE, 1, true);
     }
 
     @Override

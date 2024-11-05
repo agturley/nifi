@@ -43,9 +43,7 @@ import org.apache.nifi.syslog.parsers.SyslogParser;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.Charset;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -79,6 +77,8 @@ public class ParseSyslog extends AbstractProcessor {
         .addValidator(StandardValidators.CHARACTER_SET_VALIDATOR)
         .build();
 
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(CHARSET);
+
     static final Relationship REL_FAILURE = new Relationship.Builder()
         .name("failure")
         .description("Any FlowFile that could not be parsed as a Syslog message will be transferred to this Relationship without any attributes being added")
@@ -88,22 +88,21 @@ public class ParseSyslog extends AbstractProcessor {
         .description("Any FlowFile that is successfully parsed as a Syslog message will be to this Relationship.")
         .build();
 
-    private SyslogParser parser;
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(
+            REL_FAILURE,
+            REL_SUCCESS
+    );
 
+    private SyslogParser parser;
 
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        final List<PropertyDescriptor> properties = new ArrayList<>(1);
-        properties.add(CHARSET);
-        return properties;
+        return PROPERTIES;
     }
 
     @Override
     public Set<Relationship> getRelationships() {
-        final Set<Relationship> relationships = new HashSet<>();
-        relationships.add(REL_FAILURE);
-        relationships.add(REL_SUCCESS);
-        return relationships;
+        return RELATIONSHIPS;
     }
 
     @Override
@@ -132,13 +131,13 @@ public class ParseSyslog extends AbstractProcessor {
         try {
             event = parser.parseEvent(buffer, null);
         } catch (final ProcessException pe) {
-            getLogger().error("Failed to parse {} as a Syslog message due to {}; routing to failure", new Object[] {flowFile, pe});
+            getLogger().error("Routing to failure since failed to parse {} as a Syslog message", flowFile, pe);
             session.transfer(flowFile, REL_FAILURE);
             return;
         }
 
         if (event == null || !event.isValid()) {
-            getLogger().error("Failed to parse {} as a Syslog message: it does not conform to any of the RFC formats supported; routing to failure", new Object[] {flowFile});
+            getLogger().error("Failed to parse {} as a Syslog message: it does not conform to any of the RFC formats supported; routing to failure", flowFile);
             session.transfer(flowFile, REL_FAILURE);
             return;
         }

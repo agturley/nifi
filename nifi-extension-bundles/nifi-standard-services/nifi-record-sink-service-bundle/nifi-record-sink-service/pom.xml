@@ -17,7 +17,7 @@
     <parent>
         <groupId>org.apache.nifi</groupId>
         <artifactId>nifi-record-sink-service-bundle</artifactId>
-        <version>2.0.0-SNAPSHOT</version>
+        <version>2.1.0-SNAPSHOT</version>
     </parent>
     <artifactId>nifi-record-sink-service</artifactId>
     <packaging>jar</packaging>
@@ -37,12 +37,30 @@
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-service-utils</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-event-transport</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-web-client-provider-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-ssl-context-service-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-proxy-configuration-api</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>mockwebserver</artifactId>
+            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
@@ -57,6 +75,28 @@
             <groupId>com.sun.activation</groupId>
             <artifactId>jakarta.activation</artifactId>
             <version>2.0.1</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-web-client-api</artifactId>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-oauth2-provider-api</artifactId>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-web-client-provider-service</artifactId>
+            <version>2.1.0-SNAPSHOT</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-record-serialization-services</artifactId>
+            <version>2.1.0-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

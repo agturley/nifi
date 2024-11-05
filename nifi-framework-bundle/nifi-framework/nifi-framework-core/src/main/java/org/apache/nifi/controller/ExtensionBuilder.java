@@ -250,8 +250,10 @@ public class ExtensionBuilder {
        try {
            loggableComponent = createLoggableProcessor(loggingContext);
        } catch (final ProcessorInstantiationException pie) {
-           logger.error("Could not create Processor of type {} for ID {} due to: {}; creating \"Ghost\" implementation", type, identifier, pie.getMessage(), pie);
-
+           logger.error("Could not create Processor of type {} from {} for ID {} due to: {}; creating \"Ghost\" implementation", type, bundleCoordinate, identifier, pie.getMessage());
+           if (logger.isDebugEnabled()) {
+               logger.debug(pie.getMessage(), pie);
+           }
            final GhostProcessor ghostProc = new GhostProcessor();
            ghostProc.setIdentifier(identifier);
            ghostProc.setCanonicalClassName(type);
@@ -261,7 +263,7 @@ public class ExtensionBuilder {
 
        final String componentType;
        if (PythonBundle.isPythonCoordinate(bundleCoordinate)) {
-           componentType = type.substring("python.".length());
+           componentType = type;
        } else if (creationSuccessful) {
            componentType = loggableComponent.getComponent().getClass().getSimpleName();
        } else {
@@ -305,7 +307,10 @@ public class ExtensionBuilder {
        try {
            loggableComponent = createLoggableFlowRegistryClient();
        } catch (final FlowRepositoryClientInstantiationException e) {
-           logger.error("Could not create Flow Registry Component of type " + type + " for ID " + identifier + "; creating \"Ghost\" implementation", e);
+           logger.error("Could not create Flow Registry Component of type {} from {} for ID {} due to {}; creating \"Ghost\" implementation", type, bundleCoordinate, identifier, e.getMessage());
+           if (logger.isDebugEnabled()) {
+               logger.debug(e.getMessage(), e);
+           }
            final GhostFlowRegistryClient ghostFlowRegistryClient = new GhostFlowRegistryClient(identifier, type);
            loggableComponent = new LoggableComponent<>(ghostFlowRegistryClient, bundleCoordinate, null);
            creationSuccessful = false;
@@ -346,7 +351,10 @@ public class ExtensionBuilder {
        try {
            loggableComponent = createLoggableReportingTask();
        } catch (final ReportingTaskInstantiationException rtie) {
-           logger.error("Could not create ReportingTask of type " + type + " for ID " + identifier + "; creating \"Ghost\" implementation", rtie);
+           logger.error("Could not create ReportingTask of type {} from {} for ID {} due to: {}; creating \"Ghost\" implementation", type, bundleCoordinate, identifier, rtie.getMessage());
+           if (logger.isDebugEnabled()) {
+               logger.debug(rtie.getMessage(), rtie);
+           }
            final GhostReportingTask ghostReportingTask = new GhostReportingTask();
            ghostReportingTask.setIdentifier(identifier);
            ghostReportingTask.setCanonicalClassName(type);
@@ -389,7 +397,10 @@ public class ExtensionBuilder {
        try {
            loggableComponent = createLoggableParameterProvider();
        } catch (final ParameterProviderInstantiationException rtie) {
-           logger.error("Could not create ParameterProvider of type " + type + " for ID " + identifier + "; creating \"Ghost\" implementation", rtie);
+           logger.error("Could not create ParameterProvider of type {} from {} for ID {} due to: {}; creating \"Ghost\" implementation", type, bundleCoordinate, identifier, rtie.getMessage());
+           if (logger.isDebugEnabled()) {
+               logger.debug(rtie.getMessage(), rtie);
+           }
            final GhostParameterProvider ghostParameterProvider = new GhostParameterProvider();
            ghostParameterProvider.setIdentifier(identifier);
            ghostParameterProvider.setCanonicalClassName(type);
@@ -429,10 +440,10 @@ public class ExtensionBuilder {
        final StandardLoggingContext loggingContext = new StandardLoggingContext(null);
        try {
            return createControllerServiceNode(loggingContext);
-       } catch (final Exception e) {
-           logger.error("Could not create Controller Service of type " + type + " for ID " + identifier + " due to: " + e.getMessage() + "; creating \"Ghost\" implementation");
+       } catch (final Throwable t) {
+           logger.error("Could not create Controller Service of type {} from {} for ID {} due to: {}; creating \"Ghost\" implementation", type, bundleCoordinate, identifier, t.getMessage());
            if (logger.isDebugEnabled()) {
-               logger.debug(e.getMessage(), e);
+               logger.debug(t.getMessage(), t);
            }
 
            return createGhostControllerServiceNode();
@@ -470,7 +481,10 @@ public class ExtensionBuilder {
        try {
            loggableComponent = createLoggableFlowAnalysisRule();
        } catch (final FlowAnalysisRuleInstantiationException rtie) {
-           logger.error("Could not create FlowAnalysisRule of type {} for ID {}; creating \"Ghost\" implementation", type, identifier, rtie);
+           logger.error("Could not create FlowAnalysisRule of type {} from {} for ID {} due to: {}; creating \"Ghost\" implementation", type, bundleCoordinate, identifier, rtie.getMessage());
+           if (logger.isDebugEnabled()) {
+               logger.error(rtie.getMessage(), rtie);
+           }
            final GhostFlowAnalysisRule ghostFlowAnalysisRule = new GhostFlowAnalysisRule();
            ghostFlowAnalysisRule.setIdentifier(identifier);
            ghostFlowAnalysisRule.setCanonicalClassName(type);
@@ -603,7 +617,7 @@ public class ExtensionBuilder {
                processorNode.setBulletinLevel(ds.bulletinLevel());
            }
        } catch (final Exception ex) {
-           logger.error("Error while setting default settings from DefaultSettings annotation: {}", ex.toString(), ex);
+           logger.error("Error while setting default settings from DefaultSettings annotation", ex);
        }
    }
 
@@ -776,8 +790,8 @@ public class ExtensionBuilder {
            verifyControllerServiceReferences(processor, bundle.getClassLoader());
 
            return processorComponent;
-       } catch (final Exception e) {
-           throw new ProcessorInstantiationException(type, e);
+       } catch (final Throwable t) {
+           throw new ProcessorInstantiationException(type, t);
        }
    }
 
@@ -796,8 +810,8 @@ public class ExtensionBuilder {
            verifyControllerServiceReferences(taskComponent.getComponent(), bundle.getClassLoader());
 
            return taskComponent;
-       } catch (final Exception e) {
-           throw new ReportingTaskInstantiationException(type, e);
+       } catch (final Throwable t) {
+           throw new ReportingTaskInstantiationException(type, t);
        }
    }
 
@@ -805,15 +819,14 @@ public class ExtensionBuilder {
        try {
            final LoggableComponent<FlowAnalysisRule> loggableComponent = createLoggableComponent(FlowAnalysisRule.class, new StandardLoggingContext(null));
 
-           final String taskName = loggableComponent.getComponent().getClass().getSimpleName();
            final FlowAnalysisRuleInitializationContext config = new StandardFlowAnalysisInitializationContext(identifier,
                    loggableComponent.getLogger(), serviceProvider, kerberosConfig, nodeTypeProvider);
 
            loggableComponent.getComponent().initialize(config);
 
            return loggableComponent;
-       } catch (final Exception e) {
-           throw new FlowAnalysisRuleInstantiationException(type, e);
+       } catch (final Throwable t) {
+           throw new FlowAnalysisRuleInstantiationException(type, t);
        }
    }
 
@@ -847,8 +860,8 @@ public class ExtensionBuilder {
            return clientComponent;
 
 
-       } catch (final Exception e) {
-           throw new FlowRepositoryClientInstantiationException(type, e);
+       } catch (final Throwable t) {
+           throw new FlowRepositoryClientInstantiationException(type, t);
        }
    }
 
@@ -866,8 +879,8 @@ public class ExtensionBuilder {
            verifyControllerServiceReferences(providerComponent.getComponent(), bundle.getClassLoader());
 
            return providerComponent;
-       } catch (final Exception e) {
-           throw new ParameterProviderInstantiationException(type, e);
+       } catch (final Throwable t) {
+           throw new ParameterProviderInstantiationException(type, t);
        }
    }
 
@@ -883,9 +896,7 @@ public class ExtensionBuilder {
                classloaderIsolationKey);
            Thread.currentThread().setContextClassLoader(detectedClassLoader);
 
-           // TODO: This is a hack because there's a bug in the UI that causes it to not load extensions that don't have a `.` in the type.
-           final String processorType = type.startsWith("python.") ? type.substring("python.".length()) : type;
-           final Processor processor = pythonBridge.createProcessor(identifier, processorType, bundleCoordinate.getVersion(), true, true);
+           final Processor processor = pythonBridge.createProcessor(identifier, type, bundleCoordinate.getVersion(), true, true);
 
            final ComponentLog componentLog = new SimpleProcessLogger(identifier, processor, new StandardLoggingContext(null));
            final TerminationAwareLogger terminationAwareLogger = new TerminationAwareLogger(componentLog);

@@ -45,7 +45,6 @@ import org.apache.nifi.processor.AbstractProcessor;
 import org.apache.nifi.processor.DataUnit;
 import org.apache.nifi.processor.ProcessContext;
 import org.apache.nifi.processor.ProcessSession;
-import org.apache.nifi.processor.ProcessorInitializationContext;
 import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.io.StreamCallback;
@@ -63,9 +62,7 @@ import java.nio.BufferOverflowException;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -144,7 +141,7 @@ import java.util.regex.Pattern;
 )
 public class ReplaceText extends AbstractProcessor {
 
-    private static Pattern REPLACEMENT_NORMALIZATION_PATTERN = Pattern.compile("(\\$\\D)");
+    private static final Pattern REPLACEMENT_NORMALIZATION_PATTERN = Pattern.compile("(\\$\\D)");
 
     // Constants
     public static final String LINE_BY_LINE = "Line-by-Line";
@@ -193,7 +190,6 @@ public class ReplaceText extends AbstractProcessor {
             "Substitute variable references (specified in ${var} form) using FlowFile attributes for looking up the replacement value by variable name. "
                     + "When this strategy is chosen, both the <Search Value> and <Replacement Value> properties are ignored.");
 
-
     public static final PropertyDescriptor REPLACEMENT_STRATEGY = new PropertyDescriptor.Builder()
         .name("Replacement Strategy")
         .description("The strategy for how and what to replace within the FlowFile's text content.")
@@ -226,7 +222,7 @@ public class ReplaceText extends AbstractProcessor {
     static final PropertyDescriptor PREPEND_TEXT = new PropertyDescriptor.Builder()
         .name("Text to Prepend")
         .displayName("Text to Prepend")
-        .description("The text to prepend to the start of the FlowFile, or each line, depending on teh configured value of the Evaluation Mode property")
+        .description("The text to prepend to the start of the FlowFile, or each line, depending on the configured value of the Evaluation Mode property")
         .required(true)
         .addValidator(Validator.VALID)
         .dependsOn(REPLACEMENT_STRATEGY, SURROUND)
@@ -235,7 +231,7 @@ public class ReplaceText extends AbstractProcessor {
     static final PropertyDescriptor APPEND_TEXT = new PropertyDescriptor.Builder()
         .name("Text to Append")
         .displayName("Text to Append")
-        .description("The text to append to the end of the FlowFile, or each line, depending on teh configured value of the Evaluation Mode property")
+        .description("The text to append to the end of the FlowFile, or each line, depending on the configured value of the Evaluation Mode property")
         .required(true)
         .addValidator(Validator.VALID)
         .dependsOn(REPLACEMENT_STRATEGY, SURROUND)
@@ -278,7 +274,17 @@ public class ReplaceText extends AbstractProcessor {
         .required(false)
         .build();
 
-
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(
+            REPLACEMENT_STRATEGY,
+            SEARCH_VALUE,
+            REPLACEMENT_VALUE,
+            PREPEND_TEXT,
+            APPEND_TEXT,
+            CHARACTER_SET,
+            MAX_BUFFER_SIZE,
+            EVALUATION_MODE,
+            LINE_BY_LINE_EVALUATION_MODE
+    );
 
     // Relationships
     public static final Relationship REL_SUCCESS = new Relationship.Builder()
@@ -291,38 +297,21 @@ public class ReplaceText extends AbstractProcessor {
         .description("FlowFiles that could not be updated are routed to this relationship")
         .build();
 
-    private List<PropertyDescriptor> properties;
-    private Set<Relationship> relationships;
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(
+            REL_SUCCESS,
+            REL_FAILURE
+    );
+
     private ReplacementStrategyExecutor replacementStrategyExecutor;
 
     @Override
-    protected void init(final ProcessorInitializationContext context) {
-        final List<PropertyDescriptor> properties = new ArrayList<>();
-        properties.add(REPLACEMENT_STRATEGY);
-        properties.add(SEARCH_VALUE);
-        properties.add(REPLACEMENT_VALUE);
-        properties.add(PREPEND_TEXT);
-        properties.add(APPEND_TEXT);
-        properties.add(CHARACTER_SET);
-        properties.add(MAX_BUFFER_SIZE);
-        properties.add(EVALUATION_MODE);
-        properties.add(LINE_BY_LINE_EVALUATION_MODE);
-        this.properties = Collections.unmodifiableList(properties);
-
-        final Set<Relationship> relationships = new HashSet<>();
-        relationships.add(REL_SUCCESS);
-        relationships.add(REL_FAILURE);
-        this.relationships = Collections.unmodifiableSet(relationships);
-    }
-
-    @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        return properties;
+        return PROPERTIES;
     }
 
     @Override
     public Set<Relationship> getRelationships() {
-        return relationships;
+        return RELATIONSHIPS;
     }
 
     @Override
@@ -423,20 +412,16 @@ public class ReplaceText extends AbstractProcessor {
         } catch (StackOverflowError e) {
             // Some regular expressions can produce many matches on large input data size using recursive code
             // do not log the StackOverflowError stack trace
-            logger.info("Transferred {} to 'failure' due to {}", new Object[] {flowFile, e.toString()});
+            logger.info("Transferred {} to 'failure'", flowFile, e);
             session.transfer(flowFile, REL_FAILURE);
             return;
-        } catch (BufferOverflowException e) {
-            logger.warn("Transferred {} to 'failure' due to {}", new Object[] {flowFile, e.toString()});
-            session.transfer(flowFile, REL_FAILURE);
-            return;
-        } catch (IllegalAttributeException | AttributeExpressionLanguageException e) {
-            logger.warn("Transferred {} to 'failure' due to {}", flowFile, e.toString(), e);
+        } catch (BufferOverflowException | IllegalAttributeException | AttributeExpressionLanguageException e) {
+            logger.warn("Transferred {} to 'failure'", flowFile, e);
             session.transfer(flowFile, REL_FAILURE);
             return;
         }
 
-        logger.info("Transferred {} to 'success'", new Object[] {flowFile});
+        logger.info("Transferred {} to 'success'", flowFile);
         session.getProvenanceReporter().modifyContent(flowFile, stopWatch.getElapsed(TimeUnit.MILLISECONDS));
         session.transfer(flowFile, REL_SUCCESS);
     }

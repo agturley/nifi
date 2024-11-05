@@ -65,7 +65,7 @@ import java.util.concurrent.TimeUnit;
 import static org.apache.nifi.processors.aws.util.RegionUtilV1.S3_REGION;
 
 @SupportsBatching
-@SeeAlso({PutS3Object.class, DeleteS3Object.class, ListS3.class})
+@SeeAlso({PutS3Object.class, DeleteS3Object.class, ListS3.class, CopyS3Object.class, GetS3ObjectMetadata.class, TagS3Object.class})
 @InputRequirement(Requirement.INPUT_REQUIRED)
 @Tags({"Amazon", "S3", "AWS", "Get", "Fetch"})
 @CapabilityDescription("Retrieves the contents of an S3 Object and writes it to the content of a FlowFile")
@@ -334,7 +334,7 @@ public class FetchS3Object extends AbstractS3Processor {
                     .explanation(String.format("Successfully performed HEAD on [%s] (%s bytes) from Bucket [%s]", key, byteCount, bucket))
                     .build());
         } catch (final Exception e) {
-            getLogger().error(String.format("Failed to fetch [%s] from Bucket [%s]", key, bucket), e);
+            getLogger().error("Failed to fetch [{}] from Bucket [{}]", key, bucket, e);
             results.add(new ConfigVerificationResult.Builder()
                     .verificationStepName("HEAD S3 Object")
                     .outcome(Outcome.FAILED)
@@ -423,7 +423,7 @@ public class FetchS3Object extends AbstractS3Processor {
             if (metadata.getVersionId() != null) {
                 attributes.put("s3.version", metadata.getVersionId());
             }
-        } catch (final IOException | AmazonClientException ioe) {
+        } catch (final IllegalArgumentException | IOException | AmazonClientException ioe) {
             flowFile = extractExceptionDetails(ioe, session, flowFile);
             getLogger().error("Failed to retrieve S3 Object for {}; routing to failure", flowFile, ioe);
             flowFile = session.penalize(flowFile);
@@ -446,7 +446,7 @@ public class FetchS3Object extends AbstractS3Processor {
 
         session.transfer(flowFile, REL_SUCCESS);
         final long transferMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
-        getLogger().info("Successfully retrieved S3 Object for {} in {} millis; routing to success", new Object[]{flowFile, transferMillis});
+        getLogger().info("Successfully retrieved S3 Object for {} in {} millis; routing to success", flowFile, transferMillis);
         session.getProvenanceReporter().fetch(flowFile, url, transferMillis);
     }
 

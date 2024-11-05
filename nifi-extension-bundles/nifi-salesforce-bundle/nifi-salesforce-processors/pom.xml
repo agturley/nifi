@@ -17,7 +17,7 @@
     <parent>
         <artifactId>nifi-salesforce-bundle</artifactId>
         <groupId>org.apache.nifi</groupId>
-        <version>2.0.0-SNAPSHOT</version>
+        <version>2.1.0-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -37,12 +37,12 @@
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-json-record-utils</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.camel</groupId>
             <artifactId>camel-salesforce</artifactId>
-            <version>3.14.10</version>
+            <version>4.8.1</version>
             <exclusions>
                 <exclusion>
                     <groupId>*</groupId>
@@ -56,7 +56,7 @@
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.module</groupId>
-            <artifactId>jackson-module-jsonSchema</artifactId>
+            <artifactId>jackson-module-jsonSchema-jakarta</artifactId>
         </dependency>
         <!-- Provided from parent nar -->
         <dependency>
@@ -71,7 +71,7 @@
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-oauth2-provider-service</artifactId>
-            <version>2.0.0-SNAPSHOT</version>
+            <version>2.1.0-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
         <dependency>

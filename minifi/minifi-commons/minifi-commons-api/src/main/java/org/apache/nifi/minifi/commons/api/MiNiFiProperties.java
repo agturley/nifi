@@ -81,8 +81,8 @@ public enum MiNiFiProperties {
     C2_KEEP_ALIVE_DURATION("c2.rest.keepAliveDuration", "5 min", false, true, TIME_PERIOD_VALIDATOR),
     C2_REST_HTTP_HEADERS("c2.rest.http.headers", "Accept:application/json", false, true, VALID),
     C2_CONFIG_DIRECTORY("c2.config.directory", "./conf", false, true, VALID),
-    C2_RUNTIME_MANIFEST_IDENTIFIER("c2.runtime.manifest.identifier", "", false, true, VALID),
-    C2_RUNTIME_TYPE("c2.runtime.type", "", false, true, VALID),
+    C2_RUNTIME_MANIFEST_IDENTIFIER("c2.runtime.manifest.identifier", "minifi", false, true, VALID),
+    C2_RUNTIME_TYPE("c2.runtime.type", "minifi-java", false, true, VALID),
     C2_ASSET_DIRECTORY("c2.asset.directory", "./asset", false, true, VALID),
     C2_SECURITY_TRUSTSTORE_LOCATION("c2.security.truststore.location", "", false, false, VALID),
     C2_SECURITY_TRUSTSTORE_PASSWORD("c2.security.truststore.password", "", true, false, VALID),
@@ -92,6 +92,8 @@ public enum MiNiFiProperties {
     C2_SECURITY_KEYSTORE_TYPE("c2.security.keystore.type", "JKS", false, false, VALID),
     C2_REQUEST_COMPRESSION("c2.request.compression", "none", false, true, VALID),
     C2_BOOTSTRAP_ACKNOWLEDGE_TIMEOUT("c2.bootstrap.acknowledge.timeout", "15 sec", false, true, VALID),
+    C2_FLOW_INFO_PROCESSOR_BULLETIN_LIMIT("c2.flow.info.processor.bulletin.limit", "1000", false, true, NON_NEGATIVE_INTEGER_VALIDATOR ),
+    C2_FLOW_INFO_PROCESSOR_STATUS_ENABLED("c2.flow.info.processor.status.enabled", "true", false, true, BOOLEAN_VALIDATOR),
     NIFI_MINIFI_NOTIFIER_INGESTORS("nifi.minifi.notifier.ingestors", null, false, true, VALID),
     NIFI_MINIFI_NOTIFIER_INGESTORS_FILE_CONFIG_PATH("nifi.minifi.notifier.ingestors.file.config.path", null, false, true, VALID),
     NIFI_MINIFI_NOTIFIER_INGESTORS_FILE_POLLING_PERIOD_SECONDS("nifi.minifi.notifier.ingestors.file.polling.period.seconds", null, false, true, NON_NEGATIVE_INTEGER_VALIDATOR),
@@ -121,7 +123,6 @@ public enum MiNiFiProperties {
     public static final String MINIFI_LOG_DIRECTORY = "nifi.minifi.log.directory";
     public static final String MINIFI_APP_LOG_FILE = "nifi.minifi.app.log.file";
     public static final String MINIFI_BOOTSTRAP_LOG_FILE = "nifi.minifi.bootstrap.log.file";
-    public static final String ADDITIONAL_SENSITIVE_PROPERTIES_KEY = "nifi.minifi.sensitive.props.additional.keys";
 
     private final String key;
     private final String defaultValue;

@@ -22,11 +22,9 @@ import org.apache.nifi.controller.repository.claim.ContentClaim;
 import org.apache.nifi.controller.repository.claim.ResourceClaim;
 import org.apache.nifi.controller.repository.claim.ResourceClaimManager;
 import org.apache.nifi.flowfile.attributes.CoreAttributes;
-import org.apache.nifi.repository.encryption.configuration.EncryptionProtocol;
 import org.apache.nifi.repository.schema.FieldCache;
 import org.apache.nifi.util.FormatUtils;
 import org.apache.nifi.util.NiFiProperties;
-import org.apache.nifi.wali.EncryptedSequentialAccessWriteAheadLog;
 import org.apache.nifi.wali.SequentialAccessWriteAheadLog;
 import org.apache.nifi.wali.SnapshotCapture;
 import org.slf4j.Logger;
@@ -84,7 +82,6 @@ import java.util.stream.Collectors;
  */
 public class WriteAheadFlowFileRepository implements FlowFileRepository, SyncListener {
     static final String FLOWFILE_REPOSITORY_DIRECTORY_PREFIX = "nifi.flowfile.repository.directory";
-    private static final String WRITE_AHEAD_LOG_IMPL = "nifi.flowfile.repository.wal.implementation";
     private static final String RETAIN_ORPHANED_FLOWFILES = "nifi.flowfile.repository.retain.orphaned.flowfiles";
     private static final String FLOWFILE_REPO_CACHE_SIZE = "nifi.flowfile.repository.wal.cache.characters";
 
@@ -163,7 +160,7 @@ public class WriteAheadFlowFileRepository implements FlowFileRepository, SyncLis
         retainOrphanedFlowFiles = orphanedFlowFileProperty == null || Boolean.parseBoolean(orphanedFlowFileProperty);
 
         // determine the database file path and ensure it exists
-        String writeAheadLogImpl = nifiProperties.getProperty(WRITE_AHEAD_LOG_IMPL);
+        String writeAheadLogImpl = nifiProperties.getProperty(NiFiProperties.FLOWFILE_REPOSITORY_WAL_IMPLEMENTATION);
         if (writeAheadLogImpl == null) {
             writeAheadLogImpl = DEFAULT_WAL_IMPLEMENTATION;
         }
@@ -192,16 +189,7 @@ public class WriteAheadFlowFileRepository implements FlowFileRepository, SyncLis
     }
 
     protected RepositoryRecordSerdeFactory createSerdeFactory(final ResourceClaimManager claimManager, final FieldCache fieldCache) {
-        final String version = nifiProperties.getProperty(NiFiProperties.REPOSITORY_ENCRYPTION_PROTOCOL_VERSION);
-        final boolean encryptionConfigured = Integer.toString(EncryptionProtocol.VERSION_1.getVersionNumber()).equals(version);
-        final String implementation = nifiProperties.getProperty(NiFiProperties.FLOWFILE_REPOSITORY_WAL_IMPLEMENTATION);
-
-        if (EncryptedSequentialAccessWriteAheadLog.class.getName().equals(implementation) || encryptionConfigured) {
-            logger.info("Creating Encrypted FlowFile Repository [{}]", EncryptedSequentialAccessWriteAheadLog.class.getName());
-            return new EncryptedRepositoryRecordSerdeFactory(claimManager, nifiProperties, fieldCache);
-        } else {
-            return new StandardRepositoryRecordSerdeFactory(claimManager, fieldCache);
-        }
+        return new StandardRepositoryRecordSerdeFactory(claimManager, fieldCache);
     }
 
     public void initialize(final ResourceClaimManager claimManager, final RepositoryRecordSerdeFactory serdeFactory, final FieldCache fieldCache) throws IOException {
@@ -223,8 +211,8 @@ public class WriteAheadFlowFileRepository implements FlowFileRepository, SyncLis
             // TODO: May need to instantiate ESAWAL for clarity?
             wal = new SequentialAccessWriteAheadLog<>(flowFileRepositoryPaths.get(0), serdeFactory, this);
         } else {
-            throw new IllegalStateException("Cannot create Write-Ahead Log because the configured property '" + WRITE_AHEAD_LOG_IMPL + "' has an invalid value of '" + walImplementation
-                    + "'. Please update nifi.properties to indicate a valid value for this property.");
+            throw new IllegalStateException("Cannot create Write-Ahead Log because the configured property '" + NiFiProperties.FLOWFILE_REPOSITORY_WAL_IMPLEMENTATION +
+                    "' has an invalid value of '" + walImplementation + "'. Please update nifi.properties to indicate a valid value for this property.");
         }
 
         logger.info("Initialized FlowFile Repository");
@@ -278,7 +266,7 @@ public class WriteAheadFlowFileRepository implements FlowFileRepository, SyncLis
                     }
                 }
             } catch (final Exception e) {
-                logger.warn("Failed to read swap file " + swapLocation + " when attempting to find resource claim references", e);
+                logger.warn("Failed to read swap file {} when attempting to find resource claim references", swapLocation, e);
             }
         }
 
@@ -685,7 +673,7 @@ public class WriteAheadFlowFileRepository implements FlowFileRepository, SyncLis
             this.swapLocationSuffixes.remove(normalizeSwapLocation(swapLocation));
         }
 
-        logger.info("Repository updated to reflect that {} FlowFiles were swapped in to {}", new Object[]{swapRecords.size(), queue});
+        logger.info("Repository updated to reflect that {} FlowFiles were swapped in to {}", swapRecords.size(), queue);
     }
 
     void deleteRecursively(final File dir) {
@@ -853,7 +841,7 @@ public class WriteAheadFlowFileRepository implements FlowFileRepository, SyncLis
                     final long millis = TimeUnit.MILLISECONDS.convert(end - start, TimeUnit.NANOSECONDS);
                     logger.info("Successfully checkpointed FlowFile Repository with {} records in {} milliseconds", numRecordsCheckpointed, millis);
                 } catch (final Throwable t) {
-                    logger.error("Unable to checkpoint FlowFile Repository due to " + t.toString(), t);
+                    logger.error("Unable to checkpoint FlowFile Repository", t);
                 }
             }
         };

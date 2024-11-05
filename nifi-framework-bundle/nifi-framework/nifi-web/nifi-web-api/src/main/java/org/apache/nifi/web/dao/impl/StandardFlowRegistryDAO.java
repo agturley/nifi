@@ -33,6 +33,8 @@ import org.apache.nifi.web.NiFiCoreException;
 import org.apache.nifi.web.ResourceNotFoundException;
 import org.apache.nifi.web.api.dto.FlowRegistryClientDTO;
 import org.apache.nifi.web.dao.FlowRegistryDAO;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Repository;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -42,6 +44,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 
+@Repository
 public class StandardFlowRegistryDAO extends ComponentDAO implements FlowRegistryDAO {
     private FlowController flowController;
 
@@ -113,12 +116,21 @@ public class StandardFlowRegistryDAO extends ComponentDAO implements FlowRegistr
             if (flowRegistry == null) {
                 throw new IllegalArgumentException("The specified registry id is unknown to this NiFi.");
             }
+            final FlowRegistryBranch defaultBranch = flowRegistry.getDefaultBranch(context);
             final Set<FlowRegistryBranch> branches = flowRegistry.getBranches(context);
-            final Set<FlowRegistryBranch> sortedBranches = new TreeSet<>(Comparator.comparing(FlowRegistryBranch::getName));
+            // Sort the default branch first, this allows main to always be the first
+            final Set<FlowRegistryBranch> sortedBranches = new TreeSet<>((branch1, branch2) -> {
+                if (branch1.getName().equals(defaultBranch.getName())) {
+                    return -1;
+                } else if (branch2.getName().equals(defaultBranch.getName())) {
+                    return 1;
+                }
+                return branch1.getName().compareTo(branch2.getName());
+            });
             sortedBranches.addAll(branches);
             return sortedBranches;
         } catch (final IOException | FlowRegistryException ioe) {
-            throw new NiFiCoreException("Unable to get branches for registry with ID " + registryId + ": " + ioe, ioe);
+            throw new NiFiCoreException("Unable to get branches for registry with ID " + registryId + ": " + ioe.getMessage(), ioe);
         }
     }
 
@@ -131,7 +143,7 @@ public class StandardFlowRegistryDAO extends ComponentDAO implements FlowRegistr
             }
             return flowRegistry.getDefaultBranch(context);
         } catch (final IOException | FlowRegistryException ioe) {
-            throw new NiFiCoreException("Unable to get default branch for registry with ID " + registryId + ": " + ioe, ioe);
+            throw new NiFiCoreException("Unable to get default branch for registry with ID " + registryId + ": " + ioe.getMessage(), ioe);
         }
     }
 
@@ -150,7 +162,7 @@ public class StandardFlowRegistryDAO extends ComponentDAO implements FlowRegistr
         } catch (final FlowRegistryException e) {
             throw new IllegalStateException(e.getMessage(), e);
         } catch (final IOException ioe) {
-            throw new NiFiCoreException("Unable to obtain listing of buckets: " + ioe, ioe);
+            throw new NiFiCoreException("Unable to obtain listing of buckets: " + ioe.getMessage(), ioe);
         }
     }
 
@@ -168,7 +180,7 @@ public class StandardFlowRegistryDAO extends ComponentDAO implements FlowRegistr
             sortedFlows.addAll(flows);
             return sortedFlows;
         } catch (final IOException | FlowRegistryException ioe) {
-            throw new NiFiCoreException("Unable to obtain listing of flows for bucket with ID " + bucketId + ": " + ioe, ioe);
+            throw new NiFiCoreException("Unable to obtain listing of flows for bucket with ID " + bucketId + ": " + ioe.getMessage(), ioe);
         }
     }
 
@@ -183,7 +195,7 @@ public class StandardFlowRegistryDAO extends ComponentDAO implements FlowRegistr
             final FlowLocation flowLocation = new FlowLocation(branch, bucketId, flowId);
             return flowRegistry.getFlow(context, flowLocation);
         } catch (final IOException | FlowRegistryException ioe) {
-            throw new NiFiCoreException("Unable to obtain listing of flows for bucket with ID " + bucketId + ": " + ioe, ioe);
+            throw new NiFiCoreException("Unable to obtain listing of flows for bucket with ID " + bucketId + ": " + ioe.getMessage(), ioe);
         }
     }
 
@@ -207,7 +219,7 @@ public class StandardFlowRegistryDAO extends ComponentDAO implements FlowRegistr
             sortedFlowVersions.addAll(flowVersions);
             return sortedFlowVersions;
         } catch (final IOException | FlowRegistryException ioe) {
-            throw new NiFiCoreException("Unable to obtain listing of versions for bucket with ID " + bucketId + " and flow with ID " + flowId + ": " + ioe, ioe);
+            throw new NiFiCoreException("Unable to obtain listing of versions for bucket with ID " + bucketId + " and flow with ID " + flowId + ": " + ioe.getMessage(), ioe);
         }
     }
 
@@ -223,6 +235,7 @@ public class StandardFlowRegistryDAO extends ComponentDAO implements FlowRegistr
         return flowRegistry;
     }
 
+    @Autowired
     public void setFlowController(final FlowController flowController) {
         this.flowController = flowController;
     }

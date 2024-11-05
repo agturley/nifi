@@ -17,7 +17,7 @@
 package org.apache.nifi.web.security.saml2.service.web;
 
 import org.apache.nifi.web.security.saml2.registration.Saml2RegistrationProperty;
-import org.apache.nifi.web.util.RequestUriBuilder;
+import org.apache.nifi.web.servlet.shared.RequestUriBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.convert.converter.Converter;
@@ -92,7 +92,7 @@ public class StandardRelyingPartyRegistrationResolver implements Converter<HttpS
             final String singleLogoutServiceLocation = resolveUrl(registration.getSingleLogoutServiceLocation(), baseUrl, registration);
             final String singleLogoutServiceResponseLocation = resolveUrl(registration.getSingleLogoutServiceResponseLocation(), baseUrl, registration);
 
-            resolved = RelyingPartyRegistration.withRelyingPartyRegistration(registration)
+            resolved = registration.mutate()
                     .assertionConsumerServiceLocation(assertionConsumerServiceLocation)
                     .singleLogoutServiceLocation(singleLogoutServiceLocation)
                     .singleLogoutServiceResponseLocation(singleLogoutServiceResponseLocation)

@@ -22,6 +22,7 @@ import org.apache.commons.lang3.builder.ToStringBuilder;
 import org.apache.commons.lang3.builder.ToStringStyle;
 import org.apache.nifi.annotation.lifecycle.OnRemoved;
 import org.apache.nifi.annotation.lifecycle.OnShutdown;
+import org.apache.nifi.asset.AssetManager;
 import org.apache.nifi.authorization.Resource;
 import org.apache.nifi.authorization.resource.Authorizable;
 import org.apache.nifi.authorization.resource.ResourceFactory;
@@ -192,6 +193,7 @@ public final class StandardProcessGroup implements ProcessGroup {
     private final VersionControlFields versionControlFields = new VersionControlFields();
     private volatile ParameterContext parameterContext;
     private final NodeTypeProvider nodeTypeProvider;
+    private final AssetManager assetManager;
     private final StatelessGroupNode statelessGroupNode;
     private volatile ExecutionEngine executionEngine = ExecutionEngine.INHERITED;
     private volatile int maxConcurrentTasks = 1;
@@ -221,7 +223,8 @@ public final class StandardProcessGroup implements ProcessGroup {
                                 final PropertyEncryptor encryptor, final ExtensionManager extensionManager,
                                 final StateManagerProvider stateManagerProvider, final FlowManager flowManager,
                                 final ReloadComponent reloadComponent, final NodeTypeProvider nodeTypeProvider,
-                                final NiFiProperties nifiProperties, final StatelessGroupNodeFactory statelessGroupNodeFactory) {
+                                final NiFiProperties nifiProperties, final StatelessGroupNodeFactory statelessGroupNodeFactory,
+                                final AssetManager assetManager) {
 
         this.id = id;
         this.controllerServiceProvider = serviceProvider;
@@ -234,6 +237,7 @@ public final class StandardProcessGroup implements ProcessGroup {
         this.flowManager = flowManager;
         this.reloadComponent = reloadComponent;
         this.nodeTypeProvider = nodeTypeProvider;
+        this.assetManager = assetManager;
 
         name = new AtomicReference<>();
         position = new AtomicReference<>(new Position(0D, 0D));
@@ -257,7 +261,7 @@ public final class StandardProcessGroup implements ProcessGroup {
                 final String explicitValue = nifiProperties.getProperty(NiFiProperties.BACKPRESSURE_COUNT, String.valueOf(DEFAULT_BACKPRESSURE_OBJECT));
                 count = Long.parseLong(explicitValue);
             } catch (final Exception e) {
-                LOG.warn("nifi.properties has an invalid value for the '" + NiFiProperties.BACKPRESSURE_COUNT + "' property. Using default value instaed.");
+                LOG.warn("nifi.properties has an invalid value for the '{}' property. Using default value instead.", NiFiProperties.BACKPRESSURE_COUNT);
                 count = DEFAULT_BACKPRESSURE_OBJECT;
             }
             nifiPropertiesBackpressureCount = count;
@@ -267,7 +271,7 @@ public final class StandardProcessGroup implements ProcessGroup {
                 size = nifiProperties.getProperty(NiFiProperties.BACKPRESSURE_SIZE, DEFAULT_BACKPRESSURE_DATA_SIZE);
                 DataUnit.parseDataSize(size, DataUnit.B);
             } catch (final Exception e) {
-                LOG.warn("nifi.properties has an invalid value for the '" + NiFiProperties.BACKPRESSURE_SIZE + "' property. Using default value instaed.");
+                LOG.warn("nifi.properties has an invalid value for the '{}' property. Using default value instead.", NiFiProperties.BACKPRESSURE_SIZE);
                 size = DEFAULT_BACKPRESSURE_DATA_SIZE;
             }
             nifiPropertiesBackpressureSize = size;
@@ -279,14 +283,6 @@ public final class StandardProcessGroup implements ProcessGroup {
     @Override
     public ProcessGroup getParent() {
         return parent.get();
-    }
-
-    private ProcessGroup getRoot() {
-        ProcessGroup root = this;
-        while (root.getParent() != null) {
-            root = root.getParent();
-        }
-        return root;
     }
 
     @Override
@@ -553,7 +549,7 @@ public final class StandardProcessGroup implements ProcessGroup {
                 try {
                     node.getProcessGroup().startProcessor(node, true);
                 } catch (final Throwable t) {
-                    LOG.error("Unable to start processor {} due to {}", new Object[]{node.getIdentifier(), t});
+                    LOG.error("Unable to start processor {}", node.getIdentifier(), t);
                 }
             });
 
@@ -3838,6 +3834,7 @@ public final class StandardProcessGroup implements ProcessGroup {
             .mapInstanceIdentifiers(false)
             .mapControllerServiceReferencesToVersionedId(true)
             .mapFlowRegistryClientId(false)
+            .mapAssetReferences(false)
             .build();
 
         synchronizeFlow(proposedSnapshot, synchronizationOptions, flowMappingOptions);
@@ -4022,7 +4019,8 @@ public final class StandardProcessGroup implements ProcessGroup {
             .componentScheduler(componentScheduler)
             .flowMappingOptions(flowMappingOptions)
             .processContextFactory(this::createProcessContext)
-                .configurationContextFactory(this::createConfigurationContext)
+            .configurationContextFactory(this::createConfigurationContext)
+            .assetManager(assetManager)
             .build();
     }
 
@@ -4350,6 +4348,8 @@ public final class StandardProcessGroup implements ProcessGroup {
         try {
             verifyCanSetExecutionEngine(executionEngine);
             this.executionEngine = executionEngine;
+            findAllProcessors().forEach(ProcessorNode::resetValidationState);
+            findAllControllerServices().forEach(ControllerServiceNode::resetValidationState);
         } finally {
             writeLock.unlock();
         }
@@ -4408,6 +4408,23 @@ public final class StandardProcessGroup implements ProcessGroup {
             }
         }
 
+        // Ensure that we are not changing a parent to Stateless when a child is explicitly set to STANDARD.
+        if (resolvedProposedEngine == ExecutionEngine.STATELESS) {
+            for (final ProcessGroup descendant : findAllProcessGroups()) {
+                final ExecutionEngine descendantEngine = descendant.getExecutionEngine();
+                if (descendantEngine == ExecutionEngine.STANDARD) {
+                    throw new IllegalStateException("A Process Group using the Stateless Engine may not have a child Process Group using the Standard Engine. Cannot set Execution Engine of " + this +
+                        " to Stateless because it has a child Process Group " + descendant + " using the Standard Engine");
+                }
+            }
+        }
+
+        verifyCanUpdateExecutionEngine();
+    }
+
+    @Override
+    public void verifyCanUpdateExecutionEngine() {
+        // Ensure that no components are running / services enabled.
         for (final ProcessorNode processor : getProcessors()) {
             if (processor.isRunning()) {
                 throw new IllegalStateException("Cannot change Execution Engine for " + this + " while components are running. " + processor + " is currently running.");
@@ -4434,6 +4451,7 @@ public final class StandardProcessGroup implements ProcessGroup {
             }
         }
 
+        // Ensure that there is no data queued.
         for (final Connection connection : getConnections()) {
             final boolean queueEmpty = connection.getFlowFileQueue().isEmpty();
             if (!queueEmpty) {
@@ -4441,9 +4459,10 @@ public final class StandardProcessGroup implements ProcessGroup {
             }
         }
 
+        // Ensure that all descendants are in a good state for updating the execution engine.
         for (final ProcessGroup child : getProcessGroups()) {
             if (child.getExecutionEngine() == ExecutionEngine.INHERITED) {
-                child.verifyCanSetExecutionEngine(executionEngine);
+                child.verifyCanUpdateExecutionEngine();
             }
         }
     }

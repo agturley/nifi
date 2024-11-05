@@ -60,7 +60,6 @@ import org.apache.nifi.controller.repository.StandardRepositoryRecord;
 import org.apache.nifi.controller.repository.SwapSummary;
 import org.apache.nifi.controller.repository.claim.ContentClaim;
 import org.apache.nifi.controller.repository.claim.ResourceClaim;
-import org.apache.nifi.controller.repository.claim.ResourceClaimManager;
 import org.apache.nifi.controller.swap.StandardSwapSummary;
 import org.apache.nifi.events.EventReporter;
 import org.apache.nifi.flowfile.FlowFilePrioritizer;
@@ -125,11 +124,11 @@ public class SocketLoadBalancedFlowFileQueue extends AbstractFlowFileQueue imple
 
 
     public SocketLoadBalancedFlowFileQueue(final String identifier, final ProcessScheduler scheduler, final FlowFileRepository flowFileRepo,
-                                           final ProvenanceEventRepository provRepo, final ContentRepository contentRepo, final ResourceClaimManager resourceClaimManager,
+                                           final ProvenanceEventRepository provRepo, final ContentRepository contentRepo,
                                            final ClusterCoordinator clusterCoordinator, final AsyncLoadBalanceClientRegistry clientRegistry, final FlowFileSwapManager swapManager,
                                            final int swapThreshold, final EventReporter eventReporter) {
 
-        super(identifier, scheduler, flowFileRepo, provRepo, resourceClaimManager);
+        super(identifier, scheduler, flowFileRepo, provRepo);
         this.eventReporter = eventReporter;
         this.swapManager = swapManager;
         this.flowFileRepo = flowFileRepo;
@@ -1018,7 +1017,7 @@ public class SocketLoadBalancedFlowFileQueue extends AbstractFlowFileQueue imple
             return;
         }
 
-        logger.info("{} {} FlowFiles have expired and will be removed", new Object[] {this, expired.size()});
+        logger.info("{} {} FlowFiles have expired and will be removed", this, expired.size());
         final List<RepositoryRecord> expiredRecords = new ArrayList<>(expired.size());
         final List<ProvenanceEventRecord> provenanceEvents = new ArrayList<>(expired.size());
 
@@ -1049,7 +1048,7 @@ public class SocketLoadBalancedFlowFileQueue extends AbstractFlowFileQueue imple
             provenanceEvents.add(provenanceEvent);
 
             final long flowFileLife = System.currentTimeMillis() - flowFile.getEntryDate();
-            logger.debug("{} terminated due to FlowFile expiration; life of FlowFile = {} ms", new Object[] {flowFile, flowFileLife});
+            logger.debug("{} terminated due to FlowFile expiration; life of FlowFile = {} ms", flowFile, flowFileLife);
         }
 
         try {

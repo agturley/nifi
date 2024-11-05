@@ -28,7 +28,6 @@ import org.apache.nifi.annotation.behavior.WritesAttribute;
 import org.apache.nifi.annotation.behavior.WritesAttributes;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
 import org.apache.nifi.annotation.documentation.Tags;
-import org.apache.nifi.avro.AvroSchemaValidator;
 import org.apache.nifi.avro.AvroTypeUtil;
 import org.apache.nifi.components.AllowableValue;
 import org.apache.nifi.components.PropertyDescriptor;
@@ -37,6 +36,7 @@ import org.apache.nifi.components.ValidationResult;
 import org.apache.nifi.expression.ExpressionLanguageScope;
 import org.apache.nifi.flowfile.FlowFile;
 import org.apache.nifi.flowfile.attributes.CoreAttributes;
+import org.apache.nifi.migration.PropertyConfiguration;
 import org.apache.nifi.processor.AbstractProcessor;
 import org.apache.nifi.processor.ProcessContext;
 import org.apache.nifi.processor.ProcessSession;
@@ -65,7 +65,6 @@ import org.apache.nifi.serialization.record.validation.ValidationError;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -74,6 +73,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+
+import static org.apache.nifi.schema.access.SchemaAccessUtils.SCHEMA_BRANCH_NAME;
+import static org.apache.nifi.schema.access.SchemaAccessUtils.SCHEMA_NAME;
+import static org.apache.nifi.schema.access.SchemaAccessUtils.SCHEMA_NAME_PROPERTY;
+import static org.apache.nifi.schema.access.SchemaAccessUtils.SCHEMA_REGISTRY;
+import static org.apache.nifi.schema.access.SchemaAccessUtils.SCHEMA_TEXT;
+import static org.apache.nifi.schema.access.SchemaAccessUtils.SCHEMA_TEXT_PROPERTY;
+import static org.apache.nifi.schema.access.SchemaAccessUtils.SCHEMA_VERSION;
 
 @SideEffectFree
 @SupportsBatching
@@ -90,10 +97,6 @@ import java.util.Set;
 })
 public class ValidateRecord extends AbstractProcessor {
 
-    static final AllowableValue SCHEMA_NAME_PROPERTY = new AllowableValue("schema-name-property", "Use Schema Name Property",
-        "The schema to validate the data against is determined by looking at the 'Schema Name' Property and looking up the schema in the configured Schema Registry");
-    static final AllowableValue SCHEMA_TEXT_PROPERTY = new AllowableValue("schema-text-property", "Use Schema Text Property",
-        "The schema to validate the data against is determined by looking at the 'Schema Text' Property and parsing the schema as an Avro schema");
     static final AllowableValue READER_SCHEMA = new AllowableValue("reader-schema", "Use Reader's Schema",
         "The schema to validate the data against is determined by asking the configured Record Reader for its schema");
 
@@ -131,31 +134,6 @@ public class ValidateRecord extends AbstractProcessor {
         .allowableValues(READER_SCHEMA, SCHEMA_NAME_PROPERTY, SCHEMA_TEXT_PROPERTY)
         .defaultValue(READER_SCHEMA.getValue())
         .required(true)
-        .build();
-    public static final PropertyDescriptor SCHEMA_REGISTRY = new PropertyDescriptor.Builder()
-        .name("schema-registry")
-        .displayName("Schema Registry")
-        .description("Specifies the Controller Service to use for the Schema Registry. This is necessary only if the Schema Access Strategy is set to \"Use 'Schema Name' Property\".")
-        .identifiesControllerService(SchemaRegistry.class)
-        .required(false)
-        .build();
-    static final PropertyDescriptor SCHEMA_NAME = new PropertyDescriptor.Builder()
-        .name("schema-name")
-        .displayName("Schema Name")
-        .description("Specifies the name of the schema to lookup in the Schema Registry property")
-        .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
-        .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
-        .defaultValue("${schema.name}")
-        .required(false)
-        .build();
-    static final PropertyDescriptor SCHEMA_TEXT = new PropertyDescriptor.Builder()
-        .name("schema-text")
-        .displayName("Schema Text")
-        .description("The text of an Avro-formatted Schema")
-        .addValidator(new AvroSchemaValidator())
-        .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
-        .defaultValue("${avro.schema}")
-        .required(false)
         .build();
     static final PropertyDescriptor ALLOW_EXTRA_FIELDS = new PropertyDescriptor.Builder()
         .name("allow-extra-fields")
@@ -213,6 +191,23 @@ public class ValidateRecord extends AbstractProcessor {
         .addValidator(StandardValidators.POSITIVE_INTEGER_VALIDATOR)
         .build();
 
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(
+            RECORD_READER,
+            RECORD_WRITER,
+            INVALID_RECORD_WRITER,
+            SCHEMA_ACCESS_STRATEGY,
+            SCHEMA_REGISTRY,
+            SCHEMA_NAME,
+            SCHEMA_BRANCH_NAME,
+            SCHEMA_VERSION,
+            SCHEMA_TEXT,
+            ALLOW_EXTRA_FIELDS,
+            STRICT_TYPE_CHECKING,
+            COERCE_TYPES,
+            VALIDATION_DETAILS_ATTRIBUTE_NAME,
+            MAX_VALIDATION_DETAILS_LENGTH
+    );
+
     static final Relationship REL_VALID = new Relationship.Builder()
         .name("valid")
         .description("Records that are valid according to the schema will be routed to this relationship")
@@ -226,32 +221,31 @@ public class ValidateRecord extends AbstractProcessor {
         .description("If the records cannot be read, validated, or written, for any reason, the original FlowFile will be routed to this relationship")
         .build();
 
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(
+            REL_VALID,
+            REL_INVALID,
+            REL_FAILURE
+    );
 
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        final List<PropertyDescriptor> properties = new ArrayList<>();
-        properties.add(RECORD_READER);
-        properties.add(RECORD_WRITER);
-        properties.add(INVALID_RECORD_WRITER);
-        properties.add(SCHEMA_ACCESS_STRATEGY);
-        properties.add(SCHEMA_REGISTRY);
-        properties.add(SCHEMA_NAME);
-        properties.add(SCHEMA_TEXT);
-        properties.add(ALLOW_EXTRA_FIELDS);
-        properties.add(STRICT_TYPE_CHECKING);
-        properties.add(COERCE_TYPES);
-        properties.add(VALIDATION_DETAILS_ATTRIBUTE_NAME);
-        properties.add(MAX_VALIDATION_DETAILS_LENGTH);
-        return properties;
+        return PROPERTIES;
     }
 
     @Override
     public Set<Relationship> getRelationships() {
-        final Set<Relationship> relationships = new HashSet<>();
-        relationships.add(REL_VALID);
-        relationships.add(REL_INVALID);
-        relationships.add(REL_FAILURE);
-        return relationships;
+        return RELATIONSHIPS;
+    }
+
+    @Override
+    public void migrateProperties(final PropertyConfiguration config) {
+        if (config.isPropertySet(SCHEMA_ACCESS_STRATEGY)) {
+            config.getPropertyValue(SCHEMA_ACCESS_STRATEGY).ifPresent(value -> {
+                if (value.equals("schema-name-property")) {
+                    config.setProperty(SCHEMA_ACCESS_STRATEGY, SCHEMA_NAME_PROPERTY.getValue());
+                }
+            });
+        }
     }
 
     @Override
@@ -259,7 +253,7 @@ public class ValidateRecord extends AbstractProcessor {
         final String schemaAccessStrategy = validationContext.getProperty(SCHEMA_ACCESS_STRATEGY).getValue();
         if (schemaAccessStrategy.equals(SCHEMA_NAME_PROPERTY.getValue())) {
             if (!validationContext.getProperty(SCHEMA_REGISTRY).isSet()) {
-                return Collections.singleton(new ValidationResult.Builder()
+                return Set.of(new ValidationResult.Builder()
                     .subject("Schema Registry")
                     .valid(false)
                     .explanation("If the Schema Access Strategy is set to \"Use 'Schema Name' Property\", the Schema Registry property must also be set")
@@ -268,7 +262,7 @@ public class ValidateRecord extends AbstractProcessor {
 
             final SchemaRegistry registry = validationContext.getProperty(SCHEMA_REGISTRY).asControllerService(SchemaRegistry.class);
             if (!registry.getSuppliedSchemaFields().contains(SchemaField.SCHEMA_NAME)) {
-                return Collections.singleton(new ValidationResult.Builder()
+                return Set.of(new ValidationResult.Builder()
                     .subject("Schema Registry")
                     .valid(false)
                     .explanation("The configured Schema Registry does not support accessing schemas by name")
@@ -324,64 +318,64 @@ public class ValidateRecord extends AbstractProcessor {
                     final SchemaValidationResult result = validator.validate(record);
                     recordCount++;
 
-                    RecordSetWriter writer;
                     if (result.isValid()) {
                         validCount++;
                         if (validFlowFile == null) {
                             validFlowFile = session.create(flowFile);
                         }
 
-                        validWriter = writer = createIfNecessary(validWriter, validRecordWriterFactory, session, validFlowFile, validationSchema);
+                        validWriter = createIfNecessary(validWriter, validRecordWriterFactory, session, validFlowFile, validationSchema);
 
+                        writeRecord(validWriter, record);
                     } else {
                         invalidCount++;
                         logValidationErrors(flowFile, recordCount, result);
 
-                        if (invalidFlowFile == null) {
-                            invalidFlowFile = session.create(flowFile);
-                        }
-
-                        invalidWriter = writer = createIfNecessary(invalidWriter, invalidRecordWriterFactory, session, invalidFlowFile, record.getSchema());
-
-                        // Add all of the validation errors to our Set<ValidationError> but only keep up to MAX_VALIDATION_ERRORS because if
-                        // we keep too many then we both use up a lot of heap and risk outputting so much information in the Provenance Event
-                        // that it is too noisy to be useful.
-                        for (final ValidationError validationError : result.getValidationErrors()) {
-                            final Optional<String> fieldName = validationError.getFieldName();
-
-                            switch (validationError.getType()) {
-                                case EXTRA_FIELD:
-                                    if (fieldName.isPresent()) {
-                                        extraFields.add(fieldName.get());
-                                    } else {
-                                        otherProblems.add(validationError.getExplanation());
-                                    }
-                                    break;
-                                case MISSING_FIELD:
-                                    if (fieldName.isPresent()) {
-                                        missingFields.add(fieldName.get());
-                                    } else {
-                                        otherProblems.add(validationError.getExplanation());
-                                    }
-                                    break;
-                                case INVALID_FIELD:
-                                    if (fieldName.isPresent()) {
-                                        invalidFields.add(fieldName.get());
-                                    } else {
-                                        otherProblems.add(validationError.getExplanation());
-                                    }
-                                    break;
-                                case OTHER:
-                                    otherProblems.add(validationError.getExplanation());
-                                    break;
+                        if (!context.isAutoTerminated(REL_INVALID)) {
+                            // If REL_INVALID is not autoTerminated, then create a flow file and calculate the invalid details.
+                            // If it is autoTerminated, then skip doing work which will just be discarded.
+                            if (invalidFlowFile == null) {
+                                invalidFlowFile = session.create(flowFile);
                             }
-                        }
-                    }
 
-                    if (writer instanceof RawRecordWriter) {
-                        ((RawRecordWriter) writer).writeRawRecord(record);
-                    } else {
-                        writer.write(record);
+                            invalidWriter = createIfNecessary(invalidWriter, invalidRecordWriterFactory, session, invalidFlowFile, record.getSchema());
+
+                            // Add all of the validation errors to our Set<ValidationError> but only keep up to MAX_VALIDATION_ERRORS because if
+                            // we keep too many then we both use up a lot of heap and risk outputting so much information in the Provenance Event
+                            // that it is too noisy to be useful.
+                            for (final ValidationError validationError : result.getValidationErrors()) {
+                                final Optional<String> fieldName = validationError.getFieldName();
+
+                                switch (validationError.getType()) {
+                                    case EXTRA_FIELD:
+                                        if (fieldName.isPresent()) {
+                                            extraFields.add(fieldName.get());
+                                        } else {
+                                            otherProblems.add(validationError.getExplanation());
+                                        }
+                                        break;
+                                    case MISSING_FIELD:
+                                        if (fieldName.isPresent()) {
+                                            missingFields.add(fieldName.get());
+                                        } else {
+                                            otherProblems.add(validationError.getExplanation());
+                                        }
+                                        break;
+                                    case INVALID_FIELD:
+                                        if (fieldName.isPresent()) {
+                                            invalidFields.add(fieldName.get());
+                                        } else {
+                                            otherProblems.add(validationError.getExplanation());
+                                        }
+                                        break;
+                                    case OTHER:
+                                        otherProblems.add(validationError.getExplanation());
+                                        break;
+                                }
+                            }
+
+                            writeRecord(invalidWriter, record);
+                        }
                     }
                 }
 
@@ -398,7 +392,7 @@ public class ValidateRecord extends AbstractProcessor {
                     }
 
                     if (!extraFields.isEmpty()) {
-                        if (errorBuilder.length() > 0) {
+                        if (!errorBuilder.isEmpty()) {
                             errorBuilder.append("; ");
                         }
 
@@ -407,7 +401,7 @@ public class ValidateRecord extends AbstractProcessor {
                     }
 
                     if (!invalidFields.isEmpty()) {
-                        if (errorBuilder.length() > 0) {
+                        if (!errorBuilder.isEmpty()) {
                             errorBuilder.append("; ");
                         }
 
@@ -416,7 +410,7 @@ public class ValidateRecord extends AbstractProcessor {
                     }
 
                     if (!otherProblems.isEmpty()) {
-                        if (errorBuilder.length() > 0) {
+                        if (!errorBuilder.isEmpty()) {
                             errorBuilder.append("; ");
                         }
 
@@ -436,7 +430,7 @@ public class ValidateRecord extends AbstractProcessor {
             session.adjustCounter("Records Found Valid", validCount, false);
             session.adjustCounter("Records Found Invalid", invalidCount, false);
         } catch (final Exception e) {
-            getLogger().error("Failed to process {}; will route to failure", new Object[] {flowFile, e});
+            getLogger().error("Failed to process {}; will route to failure", flowFile, e);
             session.transfer(flowFile, REL_FAILURE);
             if (validFlowFile != null) {
                 session.remove(validFlowFile);
@@ -448,6 +442,16 @@ public class ValidateRecord extends AbstractProcessor {
         }
 
         session.remove(flowFile);
+    }
+
+    private void writeRecord(final RecordSetWriter writer, final Record record) throws IOException {
+        if (writer != null) {
+            if (writer instanceof RawRecordWriter) {
+                ((RawRecordWriter) writer).writeRawRecord(record);
+            } else {
+                writer.write(record);
+            }
+        }
     }
 
     private void closeQuietly(final RecordSetWriter writer) {
@@ -470,8 +474,7 @@ public class ValidateRecord extends AbstractProcessor {
 
         final Integer maxValidationDetailsLength = context.getProperty(MAX_VALIDATION_DETAILS_LENGTH).evaluateAttributeExpressions(flowFile).asInteger();
 
-        final Map<String, String> attributes = new HashMap<>();
-        attributes.putAll(writeResult.getAttributes());
+        final Map<String, String> attributes = new HashMap<>(writeResult.getAttributes());
         attributes.put("record.count", String.valueOf(writeResult.getRecordCount()));
         attributes.put(CoreAttributes.MIME_TYPE.key(), writer.getMimeType());
 
@@ -512,7 +515,7 @@ public class ValidateRecord extends AbstractProcessor {
                 sb.append(error).append("\n");
             }
 
-            getLogger().debug(sb.toString());
+            getLogger().debug("{}", sb);
         }
     }
 
@@ -524,7 +527,9 @@ public class ValidateRecord extends AbstractProcessor {
         } else if (schemaAccessStrategy.equals(SCHEMA_NAME_PROPERTY.getValue())) {
             final SchemaRegistry schemaRegistry = context.getProperty(SCHEMA_REGISTRY).asControllerService(SchemaRegistry.class);
             final String schemaName = context.getProperty(SCHEMA_NAME).evaluateAttributeExpressions(flowFile).getValue();
-            final SchemaIdentifier schemaIdentifier = SchemaIdentifier.builder().name(schemaName).build();
+            final String schemaBranchName = context.getProperty(SCHEMA_BRANCH_NAME).evaluateAttributeExpressions(flowFile).getValue();
+            final Integer schemaVersion = context.getProperty(SCHEMA_VERSION).evaluateAttributeExpressions(flowFile).asInteger();
+            final SchemaIdentifier schemaIdentifier = SchemaIdentifier.builder().name(schemaName).branch(schemaBranchName).version(schemaVersion).build();
             return schemaRegistry.retrieveSchema(schemaIdentifier);
         } else if (schemaAccessStrategy.equals(SCHEMA_TEXT_PROPERTY.getValue())) {
             final String schemaText = context.getProperty(SCHEMA_TEXT).evaluateAttributeExpressions(flowFile).getValue();

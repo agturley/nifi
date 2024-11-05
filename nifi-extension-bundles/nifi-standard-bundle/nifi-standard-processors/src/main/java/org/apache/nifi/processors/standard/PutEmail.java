@@ -56,7 +56,6 @@ import org.apache.nifi.oauth2.OAuth2AccessTokenProvider;
 import org.apache.nifi.processor.AbstractProcessor;
 import org.apache.nifi.processor.ProcessContext;
 import org.apache.nifi.processor.ProcessSession;
-import org.apache.nifi.processor.ProcessorInitializationContext;
 import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.util.StandardValidators;
@@ -68,10 +67,7 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Date;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -241,6 +237,15 @@ public class PutEmail extends AbstractProcessor {
             .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .build();
+    public static final PropertyDescriptor REPLY_TO = new PropertyDescriptor.Builder()
+        .name("Reply-To")
+        .description("The recipients that will receive the reply instead of the from (see RFC2822 §3.6.2)."
+            + "This feature is useful, for example, when the email is sent by a no-reply account. This field is optional."
+            + "Comma separated sequence of addresses following RFC822 syntax.")
+        .required(false)
+        .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+        .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
+        .build();
     public static final PropertyDescriptor SUBJECT = new PropertyDescriptor.Builder()
             .name("Subject")
             .description("The email subject")
@@ -291,6 +296,32 @@ public class PutEmail extends AbstractProcessor {
             .defaultValue(StandardCharsets.UTF_8.name())
             .build();
 
+    private static final List<PropertyDescriptor> PROPERTIES = List.of(
+            SMTP_HOSTNAME,
+            SMTP_PORT,
+            AUTHORIZATION_MODE,
+            OAUTH2_ACCESS_TOKEN_PROVIDER,
+            SMTP_USERNAME,
+            SMTP_PASSWORD,
+            SMTP_AUTH,
+            SMTP_TLS,
+            SMTP_SOCKET_FACTORY,
+            HEADER_XMAILER,
+            ATTRIBUTE_NAME_REGEX,
+            CONTENT_TYPE,
+            FROM,
+            TO,
+            CC,
+            BCC,
+            REPLY_TO,
+            SUBJECT,
+            MESSAGE,
+            CONTENT_AS_MESSAGE,
+            INPUT_CHARACTER_SET,
+            ATTACH_FILE,
+            INCLUDE_ALL_ATTRIBUTES
+    );
+
     public static final Relationship REL_SUCCESS = new Relationship.Builder()
             .name("success")
             .description("FlowFiles that are successfully sent will be routed to this relationship")
@@ -300,69 +331,33 @@ public class PutEmail extends AbstractProcessor {
             .description("FlowFiles that fail to send will be routed to this relationship")
             .build();
 
-
-    private List<PropertyDescriptor> properties;
-
-    private Set<Relationship> relationships;
+    private static final Set<Relationship> RELATIONSHIPS = Set.of(
+            REL_SUCCESS,
+            REL_FAILURE
+    );
 
     /**
      * Mapping of the mail properties to the NiFi PropertyDescriptors that will be evaluated at runtime
      */
-    private static final Map<String, PropertyDescriptor> propertyToContext = new HashMap<>();
-
-    static {
-        propertyToContext.put("mail.smtp.host", SMTP_HOSTNAME);
-        propertyToContext.put("mail.smtp.port", SMTP_PORT);
-        propertyToContext.put("mail.smtp.socketFactory.port", SMTP_PORT);
-        propertyToContext.put("mail.smtp.socketFactory.class", SMTP_SOCKET_FACTORY);
-        propertyToContext.put("mail.smtp.auth", SMTP_AUTH);
-        propertyToContext.put("mail.smtp.starttls.enable", SMTP_TLS);
-        propertyToContext.put("mail.smtp.user", SMTP_USERNAME);
-        propertyToContext.put("mail.smtp.password", SMTP_PASSWORD);
-    }
-
-    @Override
-    protected void init(final ProcessorInitializationContext context) {
-        final List<PropertyDescriptor> properties = new ArrayList<>();
-        properties.add(SMTP_HOSTNAME);
-        properties.add(SMTP_PORT);
-        properties.add(AUTHORIZATION_MODE);
-        properties.add(OAUTH2_ACCESS_TOKEN_PROVIDER);
-        properties.add(SMTP_USERNAME);
-        properties.add(SMTP_PASSWORD);
-        properties.add(SMTP_AUTH);
-        properties.add(SMTP_TLS);
-        properties.add(SMTP_SOCKET_FACTORY);
-        properties.add(HEADER_XMAILER);
-        properties.add(ATTRIBUTE_NAME_REGEX);
-        properties.add(CONTENT_TYPE);
-        properties.add(FROM);
-        properties.add(TO);
-        properties.add(CC);
-        properties.add(BCC);
-        properties.add(SUBJECT);
-        properties.add(MESSAGE);
-        properties.add(CONTENT_AS_MESSAGE);
-        properties.add(INPUT_CHARACTER_SET);
-        properties.add(ATTACH_FILE);
-        properties.add(INCLUDE_ALL_ATTRIBUTES);
-
-        this.properties = Collections.unmodifiableList(properties);
-
-        final Set<Relationship> relationships = new HashSet<>();
-        relationships.add(REL_SUCCESS);
-        relationships.add(REL_FAILURE);
-        this.relationships = Collections.unmodifiableSet(relationships);
-    }
+    private static final Map<String, PropertyDescriptor> propertyToContext = Map.of(
+    "mail.smtp.host", SMTP_HOSTNAME,
+    "mail.smtp.port", SMTP_PORT,
+    "mail.smtp.socketFactory.port", SMTP_PORT,
+    "mail.smtp.socketFactory.class", SMTP_SOCKET_FACTORY,
+    "mail.smtp.auth", SMTP_AUTH,
+    "mail.smtp.starttls.enable", SMTP_TLS,
+    "mail.smtp.user", SMTP_USERNAME,
+    "mail.smtp.password", SMTP_PASSWORD
+    );
 
     @Override
     public Set<Relationship> getRelationships() {
-        return relationships;
+        return RELATIONSHIPS;
     }
 
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
-        return properties;
+        return PROPERTIES;
     }
 
     @Override
@@ -430,13 +425,14 @@ public class PutEmail extends AbstractProcessor {
 
         final Properties properties = this.getMailPropertiesFromFlowFile(context, flowFile);
         final Session mailSession = this.createMailSession(properties);
-        final Message message = new MimeMessage(mailSession);
+        final MimeMessage message = new MimeMessage(mailSession);
 
         try {
             message.addFrom(toInetAddresses(context, flowFile, FROM));
             message.setRecipients(RecipientType.TO, toInetAddresses(context, flowFile, TO));
             message.setRecipients(RecipientType.CC, toInetAddresses(context, flowFile, CC));
             message.setRecipients(RecipientType.BCC, toInetAddresses(context, flowFile, BCC));
+            message.setReplyTo(toInetAddresses(context, flowFile, REPLY_TO));
 
             if (attributeNamePattern != null) {
                 for (final Map.Entry<String, String> entry : flowFile.getAttributes().entrySet()) {
@@ -446,7 +442,8 @@ public class PutEmail extends AbstractProcessor {
                 }
             }
             this.setMessageHeader("X-Mailer", context.getProperty(HEADER_XMAILER).evaluateAttributeExpressions(flowFile).getValue(), message);
-            message.setSubject(context.getProperty(SUBJECT).evaluateAttributeExpressions(flowFile).getValue());
+
+            message.setSubject(context.getProperty(SUBJECT).evaluateAttributeExpressions(flowFile).getValue(), StandardCharsets.UTF_8.name());
 
             final String messageText = getMessage(flowFile, context, session);
 
@@ -473,7 +470,12 @@ public class PutEmail extends AbstractProcessor {
                 final MimeBodyPart mimeFile = new MimeBodyPart();
                 session.read(flowFile, stream -> {
                     try {
-                        mimeFile.setDataHandler(new DataHandler(new ByteArrayDataSource(stream, "application/octet-stream")));
+                        final String mimeTypeAttribute = flowFile.getAttribute("mime.type");
+                        String mimeType = "application/octet-stream";
+                        if (mimeTypeAttribute != null && !mimeTypeAttribute.isEmpty()) {
+                            mimeType = mimeTypeAttribute;
+                        }
+                        mimeFile.setDataHandler(new DataHandler(new ByteArrayDataSource(stream, mimeType)));
                     } catch (final Exception e) {
                         throw new IOException(e);
                     }
@@ -694,7 +696,7 @@ public class PutEmail extends AbstractProcessor {
      */
     private String getEncoding(final ProcessContext context) {
         final Charset charset = Charset.forName(context.getProperty(INPUT_CHARACTER_SET).getValue());
-        if (Charset.forName("US-ASCII").equals(charset)) {
+        if (StandardCharsets.US_ASCII.equals(charset)) {
             return "7bit";
         }
         // Every other charset in StandardCharsets use 8 bits or more. Using base64 encoding by default

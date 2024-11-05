@@ -58,6 +58,7 @@ import java.sql.ResultSet;
 import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.SQLTransientException;
 import java.sql.Statement;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -80,6 +81,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
@@ -94,11 +96,12 @@ public class PutDatabaseRecordTest {
         // DISABLED test cases are used for single-run tests which are not parameterized
         DEFAULT_0(ENABLED, new TestCase(false, false, 0)),
         DEFAULT_1(DISABLED, new TestCase(false, false, 1)),
-        DEFAULT_2(DISABLED, new TestCase(false, false, 2)),
+        DEFAULT_2(DISABLED, new TestCase(null, false, 2)),
+        DEFAULT_5(DISABLED, new TestCase(null, false, 5)),
         DEFAULT_1000(DISABLED, new TestCase(false, false, 1000)),
 
         ROLLBACK_0(DISABLED, new TestCase(false, true, 0)),
-        ROLLBACK_1(DISABLED, new TestCase(false, true, 1)),
+        ROLLBACK_1(ENABLED, new TestCase(null, true, 1)),
         ROLLBACK_2(DISABLED, new TestCase(false, true, 2)),
         ROLLBACK_1000(ENABLED, new TestCase(false, true, 1000)),
 
@@ -199,7 +202,11 @@ public class PutDatabaseRecordTest {
         runner.addControllerService(DBCP_SERVICE_ID, dbcp, dbcpProperties);
         runner.enableControllerService(dbcp);
         runner.setProperty(PutDatabaseRecord.DBCP_SERVICE, DBCP_SERVICE_ID);
-        runner.setProperty(PutDatabaseRecord.AUTO_COMMIT, testCase.getAutoCommitAsString());
+        if (testCase.getAutoCommitAsString() == null) {
+            runner.removeProperty(PutDatabaseRecord.AUTO_COMMIT);
+        } else {
+            runner.setProperty(PutDatabaseRecord.AUTO_COMMIT, testCase.getAutoCommitAsString());
+        }
         runner.setProperty(RollbackOnFailure.ROLLBACK_ON_FAILURE, testCase.getRollbackOnFailureAsString());
         runner.setProperty(PutDatabaseRecord.MAX_BATCH_SIZE, testCase.getBatchSizeAsString());
     }
@@ -263,8 +270,59 @@ public class PutDatabaseRecordTest {
     }
 
     @Test
+    public void testProcessExceptionRouteRetry() throws InitializationException, SQLException {
+        setRunner(TestCaseEnum.DEFAULT_1.getTestCase());
+
+        // This exception should route to REL_RETRY because its cause is SQLTransientException
+        dbcp = new DBCPServiceThrowConnectionException(new SQLTransientException("connection failed"));
+        final Map<String, String> dbcpProperties = new HashMap<>();
+        runner = TestRunners.newTestRunner(processor);
+        runner.addControllerService(DBCP_SERVICE_ID, dbcp, dbcpProperties);
+        runner.enableControllerService(dbcp);
+        runner.setProperty(PutDatabaseRecord.DBCP_SERVICE, DBCP_SERVICE_ID);
+
+        final MockRecordParser parser = new MockRecordParser();
+        runner.addControllerService("parser", parser);
+        runner.enableControllerService(parser);
+
+        runner.setProperty(PutDatabaseRecord.RECORD_READER_FACTORY, "parser");
+        runner.setProperty(PutDatabaseRecord.STATEMENT_TYPE, PutDatabaseRecord.INSERT_TYPE);
+        runner.setProperty(PutDatabaseRecord.TABLE_NAME, "PERSONS");
+
+        runner.enqueue(new byte[0]);
+        runner.run();
+
+        runner.assertAllFlowFilesTransferred(PutDatabaseRecord.REL_RETRY);
+    }
+
+    @Test
+    public void testProcessExceptionRouteFailure() throws InitializationException, SQLException {
+        setRunner(TestCaseEnum.DEFAULT_1.getTestCase());
+
+        // This exception should route to REL_FAILURE because its cause is NOT SQLTransientException
+        dbcp = new DBCPServiceThrowConnectionException(new NullPointerException("connection is null"));
+        final Map<String, String> dbcpProperties = new HashMap<>();
+        runner = TestRunners.newTestRunner(processor);
+        runner.addControllerService(DBCP_SERVICE_ID, dbcp, dbcpProperties);
+        runner.enableControllerService(dbcp);
+        runner.setProperty(PutDatabaseRecord.DBCP_SERVICE, DBCP_SERVICE_ID);
+
+        final MockRecordParser parser = new MockRecordParser();
+        runner.addControllerService("parser", parser);
+        runner.enableControllerService(parser);
+
+        runner.setProperty(PutDatabaseRecord.RECORD_READER_FACTORY, "parser");
+        runner.setProperty(PutDatabaseRecord.STATEMENT_TYPE, PutDatabaseRecord.INSERT_TYPE);
+        runner.setProperty(PutDatabaseRecord.TABLE_NAME, "PERSONS");
+
+        runner.enqueue(new byte[0]);
+        runner.run();
+
+        runner.assertAllFlowFilesTransferred(PutDatabaseRecord.REL_FAILURE);
+    }
+
     public void testInsertNonRequiredColumnsUnmatchedField() throws InitializationException, ProcessException {
-        setRunner(TestCaseEnum.DEFAULT_2.getTestCase());
+        setRunner(TestCaseEnum.DEFAULT_5.getTestCase());
 
         // Need to override the @Before method with a new processor that behaves badly
         processor = new PutDatabaseRecordUnmatchedField();
@@ -347,7 +405,9 @@ public class PutDatabaseRecordTest {
         assertEquals("UPDATE PERSONS SET name = ?, code = ? WHERE id = ?",
                 processor.generateUpdate(schema, "PERSONS", null, tableSchema, settings).getSql());
         assertEquals("DELETE FROM PERSONS WHERE (id = ?) AND (name = ? OR (name is null AND ? is null)) AND (code = ? OR (code is null AND ? is null))",
-                processor.generateDelete(schema, "PERSONS", tableSchema, settings).getSql());
+                processor.generateDelete(schema, "PERSONS", null, tableSchema, settings).getSql());
+        assertEquals("DELETE FROM PERSONS WHERE (id = ?) AND (code = ? OR (code is null AND ? is null))",
+                processor.generateDelete(schema, "PERSONS", "id, code", tableSchema, settings).getSql());
     }
 
     @Test
@@ -392,7 +452,7 @@ public class PutDatabaseRecordTest {
         assertEquals("Cannot map field 'non_existing' to any column in the database\nColumns: id,name,code", e.getMessage());
 
         e = assertThrows(SQLDataException.class,
-                () -> processor.generateDelete(schema, "PERSONS", tableSchema, settings),
+                () -> processor.generateDelete(schema, "PERSONS", null, tableSchema, settings),
                 "generateDelete should fail with unmatched fields");
         assertEquals("Cannot map field 'non_existing' to any column in the database\nColumns: id,name,code", e.getMessage());
     }
@@ -714,10 +774,28 @@ public class PutDatabaseRecordTest {
         runner.setProperty(PutDatabaseRecord.FIELD_CONTAINING_SQL, "sql");
         runner.setProperty(PutDatabaseRecord.ALLOW_MULTIPLE_STATEMENTS, String.valueOf(allowMultipleStatements));
 
+        Supplier<Statement> spyStmt = createStatementSpy();
+
         final Map<String, String> attrs = new HashMap<>();
         attrs.put(PutDatabaseRecord.STATEMENT_TYPE_ATTRIBUTE, "sql");
         runner.enqueue(new byte[0], attrs);
         runner.run();
+
+        final int maxBatchSize = runner.getProcessContext().getProperty(PutDatabaseRecord.MAX_BATCH_SIZE).asInteger();
+        assertNotNull(spyStmt.get());
+        if (sqlStatements.length <= 1) {
+            // When there is only 1 sql statement, then never use batching
+            verify(spyStmt.get(), times(0)).executeBatch();
+        } else if (maxBatchSize == 0) {
+            // When maxBatchSize is 0, verify that all statements were executed in a single executeBatch call
+            verify(spyStmt.get(), times(1)).executeBatch();
+        } else if (maxBatchSize == 1) {
+            // When maxBatchSize is 1, verify that executeBatch was never called
+            verify(spyStmt.get(), times(0)).executeBatch();
+        } else {
+            // When maxBatchSize > 1, verify that executeBatch was called at least once
+            verify(spyStmt.get(), atLeastOnce()).executeBatch();
+        }
 
         runner.assertTransferCount(PutDatabaseRecord.REL_SUCCESS, 1);
         final Connection conn = dbcp.getConnection();
@@ -2328,10 +2406,41 @@ public class PutDatabaseRecordTest {
         return () -> spyStmt[0];
     }
 
+    private Supplier<Statement> createStatementSpy() {
+        final Statement[] spyStmt = new Statement[1];
+        final Answer<DelegatingConnection> answer = (inv) -> new DelegatingConnection((Connection) inv.callRealMethod()) {
+            @Override
+            public Statement createStatement() throws SQLException {
+                spyStmt[0] = spy(getDelegate().createStatement());
+                return spyStmt[0];
+            }
+        };
+        doAnswer(answer).when(dbcp).getConnection();
+        return () -> spyStmt[0];
+    }
+
     static class PutDatabaseRecordUnmatchedField extends PutDatabaseRecord {
         @Override
         SqlAndIncludedColumns generateInsert(RecordSchema recordSchema, String tableName, TableSchema tableSchema, DMLSettings settings) throws IllegalArgumentException {
             return new SqlAndIncludedColumns("INSERT INTO PERSONS VALUES (?,?,?,?)", Arrays.asList(0, 1, 2, 3));
+        }
+    }
+
+    static class DBCPServiceThrowConnectionException extends AbstractControllerService implements DBCPService {
+        private final Exception rootCause;
+
+        public DBCPServiceThrowConnectionException(final Exception rootCause) {
+            this.rootCause = rootCause;
+        }
+
+        @Override
+        public String getIdentifier() {
+            return DBCP_SERVICE_ID;
+        }
+
+        @Override
+        public Connection getConnection() throws ProcessException {
+            throw new ProcessException(rootCause);
         }
     }
 

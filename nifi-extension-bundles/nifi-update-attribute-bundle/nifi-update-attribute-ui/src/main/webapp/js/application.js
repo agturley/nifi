@@ -193,11 +193,17 @@ var ua = {
                     text: 'by name',
                     value: 'name'
                 }, {
+                    text: 'by comments',
+                    value: 'comments'
+                }, {
                     text: 'by condition',
                     value: 'condition'
                 }, {
                     text: 'by action',
                     value: 'action'
+                }, {
+                     text: 'by any field',
+                     value: 'any'
                 }],
             select: function (option) {
                 ua.applyRuleFilter();
@@ -1473,20 +1479,40 @@ var ua = {
         // determine the filter type (name, condition, action)
         if (filterType.value === 'name') {
             return [rule.name];
+        } else if (filterType.value === 'comments') {
+            return [rule.comments];
         } else if (filterType.value === 'condition') {
             var conditions = [];
             $.each(rule.conditions, function (_, condition) {
                 conditions.push(condition.expression);
             });
             return conditions;
-        } else {
+        } else if (filterType.value === 'action') {
             var actions = [];
             $.each(rule.actions, function (_, action) {
                 actions.push(action.attribute);
                 actions.push(action.value);
             });
             return actions;
+        } else if (filterType.value === 'any') {
+            // Return all relevant details for the rule
+            var allDetails = [];
+            allDetails.push(rule.name);
+            allDetails.push(rule.comments);
+
+            // Add conditions
+            $.each(rule.conditions, function (_, condition) {
+                allDetails.push(condition.expression);
+            });
+
+            // Add actions
+             $.each(rule.actions, function (_, action) {
+                allDetails.push(action.attribute);
+                allDetails.push(action.value);
+             });
+            return allDetails;
         }
+        return [];
     },
 
     /**

@@ -16,7 +16,6 @@
  */
 package org.apache.nifi.minifi;
 
-import static org.apache.nifi.minifi.commons.utils.SensitivePropertyUtils.getFormattedKey;
 import static org.apache.nifi.minifi.util.BootstrapClassLoaderUtils.createBootstrapClassLoader;
 
 import java.io.File;
@@ -75,8 +74,7 @@ public class MiNiFi {
         }
 
         Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
-            logger.error("An Unknown Error Occurred in Thread {}: {}", t, e.toString());
-            logger.error("", e);
+            logger.error("An Unknown Error Occurred in Thread {}", t, e);
         });
 
         // register the shutdown hook
@@ -227,7 +225,8 @@ public class MiNiFi {
             NiFiProperties properties = getValidatedMiNifiProperties();
             new MiNiFi(properties);
         } catch (final Throwable t) {
-            logger.error("Failure to launch MiNiFi due to " + t, t);
+            logger.error("Failure to launch MiNiFi", t);
+            System.exit(1);
         }
     }
 
@@ -239,14 +238,13 @@ public class MiNiFi {
 
     private static NiFiProperties initializeProperties(ClassLoader boostrapLoader) {
         ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
-        String key = getFormattedKey();
 
         Thread.currentThread().setContextClassLoader(boostrapLoader);
 
         try {
             Class<?> propsLoaderClass = Class.forName("org.apache.nifi.minifi.properties.MiNiFiPropertiesLoader", true, boostrapLoader);
-            Constructor<?> constructor = propsLoaderClass.getDeclaredConstructor(String.class);
-            Object loaderInstance = constructor.newInstance(key);
+            Constructor<?> constructor = propsLoaderClass.getConstructor();
+            Object loaderInstance = constructor.newInstance();
             Method getMethod = propsLoaderClass.getMethod("get");
             NiFiProperties properties = (NiFiProperties) getMethod.invoke(loaderInstance);
             logger.info("Application Properties loaded [{}]", properties.size());

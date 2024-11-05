@@ -255,8 +255,8 @@ public final class NarClassLoaders {
 
                                     // if that bundle is loaded, use it
                                     if (narCoordinateClassLoaderLookup.containsKey(coordinate.getCoordinate())) {
-                                        logger.warn(String.format("While loading '%s' unable to locate exact NAR dependency '%s'. Only found one possible match '%s'. Continuing...",
-                                                narDetail.getCoordinate().getCoordinate(), dependencyCoordinateStr, coordinate.getCoordinate()));
+                                        logger.warn("While loading '{}' unable to locate exact NAR dependency '{}'. Only found one possible match '{}'. Continuing...",
+                                                narDetail.getCoordinate().getCoordinate(), dependencyCoordinateStr, coordinate.getCoordinate());
 
                                         final ClassLoader narDependencyClassLoader = narCoordinateClassLoaderLookup.get(coordinate.getCoordinate());
                                         narClassLoader = createNarClassLoader(narDetail.getWorkingDirectory(), narDependencyClassLoader, logDetails);
@@ -298,8 +298,7 @@ public final class NarClassLoaders {
 
             // see if any nars couldn't be loaded
             for (final BundleDetails narDetail : narDetails) {
-                logger.warn(String.format("Unable to resolve required dependency '%s'. Skipping NAR '%s'",
-                        narDetail.getDependencyCoordinate().getId(), narDetail.getWorkingDirectory().getAbsolutePath()));
+                logger.warn("Unable to resolve required dependency '{}'. Skipping NAR '{}'", narDetail.getDependencyCoordinate().getId(), narDetail.getWorkingDirectory().getAbsolutePath());
             }
         }
 
@@ -378,8 +377,7 @@ public final class NarClassLoaders {
         // See if any bundles couldn't be loaded
         final Set<BundleDetails> skippedBundles = new HashSet<>();
         for (final BundleDetails bundleDetail : additionalBundleDetails) {
-            logger.warn(String.format("Unable to resolve required dependency '%s'. Skipping NAR '%s'",
-                    bundleDetail.getDependencyCoordinate().getId(), bundleDetail.getWorkingDirectory().getAbsolutePath()));
+            logger.warn("Unable to resolve required dependency '{}'. Skipping NAR '{}'", bundleDetail.getDependencyCoordinate().getId(), bundleDetail.getWorkingDirectory().getAbsolutePath());
             skippedBundles.add(bundleDetail);
         }
 
@@ -424,8 +422,8 @@ public final class NarClassLoaders {
                         final Optional<Bundle> matchingDependencyIdBundle = getBundle(coordinate);
                         if (matchingDependencyIdBundle.isPresent()) {
                             final String dependencyCoordinateStr = bundleDependencyCoordinate.getCoordinate();
-                            logger.warn(String.format("While loading '%s' unable to locate exact NAR dependency '%s'. Only found one possible match '%s'. Continuing...",
-                                    bundleDetail.getCoordinate().getCoordinate(), dependencyCoordinateStr, coordinate.getCoordinate()));
+                            logger.warn("While loading '{}' unable to locate exact NAR dependency '{}'. Only found one possible match '{}'. Continuing...",
+                                    bundleDetail.getCoordinate().getCoordinate(), dependencyCoordinateStr, coordinate.getCoordinate());
 
                             final ClassLoader narDependencyClassLoader = matchingDependencyIdBundle.get().getClassLoader();
                             bundleClassLoader = createNarClassLoader(bundleDetail.getWorkingDirectory(), narDependencyClassLoader, logDetails);
@@ -452,8 +450,7 @@ public final class NarClassLoaders {
                     final String existingNarWorkingDir = existingBundleDetails.getWorkingDirectory().getCanonicalPath();
                     final String unpackedNarWorkingDir = narDetail.getWorkingDirectory().getCanonicalPath();
 
-                    logger.error("Unable to load NAR with coordinates {} and working directory {} " +
-                                    "because another NAR with the same coordinates already exists at {}",
+                    logger.error("Unable to load NAR with coordinates {} and working directory {} because another NAR with the same coordinates already exists at {}",
                             unpackedNarCoordinate, unpackedNarWorkingDir, existingNarWorkingDir);
                 } else {
                     narDetails.add(narDetail);
@@ -476,7 +473,7 @@ public final class NarClassLoaders {
      * @throws ClassNotFoundException cfne
      */
     private static ClassLoader createNarClassLoader(final File narDirectory, final ClassLoader parentClassLoader, final boolean log) throws IOException, ClassNotFoundException {
-        logger.debug("Loading NAR file: " + narDirectory.getAbsolutePath());
+        logger.debug("Loading NAR file: {}", narDirectory.getAbsolutePath());
         final ClassLoader narClassLoader = new NarClassLoader(narDirectory, parentClassLoader);
 
         if (log) {
@@ -510,6 +507,19 @@ public final class NarClassLoaders {
         return initContext.bundles.values().stream()
                 .filter(b -> b.getBundleDetails().getCoordinate().equals(bundleCoordinate))
                 .findFirst();
+    }
+
+    /**
+     * Removes the given bundle from the init context.
+     *
+     * @param bundle the bundle to remove
+     */
+    public void removeBundle(final Bundle bundle) {
+        try {
+            initContext.bundles.remove(bundle.getBundleDetails().getWorkingDirectory().getCanonicalPath());
+        } catch (final Exception e) {
+            logger.warn("Failed to remove bundle [{}]", bundle.getBundleDetails().getCoordinate(), e);
+        }
     }
 
     /**

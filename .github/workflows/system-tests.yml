@@ -16,9 +16,6 @@
 name: system-tests
 
 on:
-  # Run every day at 00:00
-  schedule:
-    - cron: "0 0 * * *"
   push:
     paths:
       - '.github/workflows/system-tests.yml'
@@ -26,8 +23,8 @@ on:
       - 'nifi-system-tests/**'
       - 'nifi-api/**'
       - 'nifi-framework-api/**'
-      - 'nifi-nifi-framework-bundle/**'
-      - 'nifi-extension-bundles/nifi-py4j-bundle/**'
+      - 'nifi-framework-bundle/**'
+      - 'nifi-extension-bundles/nifi-py4j-extension-bundle/**'
       - 'nifi-stateless/**'
   pull_request:
     paths:
@@ -36,8 +33,8 @@ on:
       - 'nifi-system-tests/**'
       - 'nifi-api/**'
       - 'nifi-framework-api/**'
-      - 'nifi-nifi-framework-bundle/**'
-      - 'nifi-extension-bundles/nifi-py4j-bundle/**'
+      - 'nifi-framework-bundle/**'
+      - 'nifi-extension-bundles/nifi-py4j-extension-bundle/**'
       - 'nifi-stateless/**'
 
 env:
@@ -84,25 +81,17 @@ jobs:
     timeout-minutes: 120
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.os }} Java ${{ matrix.version }}
-    env:
-      # default to Amazon Corretto JDK
-      JAVA_DISTRIBUTION: corretto
     steps:
       - name: System Information
         run: |
-          hostname
           if [ "${{ runner.os }}" = "macOS" ]; then top -l 1 | grep PhysMem && sysctl machdep.cpu; else cat /proc/cpuinfo && cat /proc/meminfo; fi
           df
-      # Zulu JDK appears to be more reliable for MacOS
-      - name: Use Java distribution Zulu
-        if: ${{ runner.os == 'macOS' }}
-        run: echo "JAVA_DISTRIBUTION=zulu" >> "$GITHUB_ENV"
       - name: Checkout Code
         uses: actions/checkout@v4
-      - name: Set up Java ${{ env.JAVA_DISTRIBUTION }} ${{ matrix.version }}
+      - name: Set up Java ${{ matrix.version }}
         uses: actions/setup-java@v4
         with:
-          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          distribution: 'zulu'
           java-version: ${{ matrix.version }}
           cache: 'maven'
 

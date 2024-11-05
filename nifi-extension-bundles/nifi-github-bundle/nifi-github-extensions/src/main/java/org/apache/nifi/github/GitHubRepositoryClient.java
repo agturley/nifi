@@ -20,6 +20,9 @@
 package org.apache.nifi.github;
 
 import org.apache.nifi.registry.flow.FlowRegistryException;
+import org.apache.nifi.registry.flow.git.client.GitCommit;
+import org.apache.nifi.registry.flow.git.client.GitCreateContentRequest;
+import org.apache.nifi.registry.flow.git.client.GitRepositoryClient;
 import org.kohsuke.github.GHCommit;
 import org.kohsuke.github.GHContent;
 import org.kohsuke.github.GHContentUpdateResponse;
@@ -29,13 +32,21 @@ import org.kohsuke.github.GHRef;
 import org.kohsuke.github.GHRepository;
 import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GitHubBuilder;
+import org.kohsuke.github.authorization.AppInstallationAuthorizationProvider;
+import org.kohsuke.github.authorization.AuthorizationProvider;
+import org.kohsuke.github.extras.authorization.JWTTokenProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.security.PrivateKey;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -45,9 +56,13 @@ import java.util.stream.Collectors;
 /**
  * Client to encapsulate access to a GitHub Repository through the Hub4j GitHub client.
  */
-public class GitHubRepositoryClient {
+public class GitHubRepositoryClient implements GitRepositoryClient {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(GitHubRepositoryClient.class);
+
+    private static final String REPOSITORY_CONTENTS_PERMISSION = "contents";
+
+    private static final String WRITE_ACCESS = "write";
 
     private static final String BRANCH_REF_PATTERN = "refs/heads/%s";
     private static final int COMMIT_PAGE_SIZE = 50;
@@ -71,9 +86,12 @@ public class GitHubRepositoryClient {
         repoName = Objects.requireNonNull(builder.repoName, "Repository Name is required");
         authenticationType = Objects.requireNonNull(builder.authenticationType, "Authentication Type is required");
 
+        // Map of permission to access for tracking App Installation permissions from internal authorization
+        final Map<String, String> appPermissions = new LinkedHashMap<>();
+
         switch (authenticationType) {
             case PERSONAL_ACCESS_TOKEN -> gitHubBuilder.withOAuthToken(builder.personalAccessToken);
-            case APP_INSTALLATION_TOKEN -> gitHubBuilder.withAppInstallationToken(builder.appInstallationToken);
+            case APP_INSTALLATION -> gitHubBuilder.withAuthorizationProvider(getAppInstallationAuthorizationProvider(builder, appPermissions));
         }
 
         gitHub = gitHubBuilder.build();
@@ -90,6 +108,11 @@ public class GitHubRepositoryClient {
         if (gitHub.isAnonymous()) {
             canRead = true;
             canWrite = false;
+        } else if (GitHubAuthenticationType.APP_INSTALLATION == authenticationType) {
+            // The contents permission can be read or write when defined for an App Installation
+            canRead = appPermissions.containsKey(REPOSITORY_CONTENTS_PERMISSION);
+            final String repositoryContentsPermissions = appPermissions.get(REPOSITORY_CONTENTS_PERMISSION);
+            canWrite = WRITE_ACCESS.equals(repositoryContentsPermissions);
         } else {
             final GHMyself currentUser = gitHub.getMyself();
             canRead = repository.hasPermission(currentUser, GHPermissionType.READ);
@@ -112,23 +135,18 @@ public class GitHubRepositoryClient {
     }
 
     /**
-     * @return the authentication type this client is configured with
-     */
-    public GitHubAuthenticationType getAuthenticationType() {
-        return authenticationType;
-    }
-
-    /**
      * @return true if the repository is readable by configured credentials
      */
-    public boolean getCanRead() {
+    @Override
+    public boolean hasReadPermission() {
         return canRead;
     }
 
     /**
      * @return true if the repository is writable by the configured credentials
      */
-    public boolean getCanWrite() {
+    @Override
+    public boolean hasWritePermission() {
         return canWrite;
     }
 
@@ -141,7 +159,8 @@ public class GitHubRepositoryClient {
      * @throws IOException if an I/O error happens calling GitHub
      * @throws FlowRegistryException if a non I/O error happens calling GitHub
      */
-    public String createContent(final GitHubCreateContentRequest request) throws IOException, FlowRegistryException {
+    @Override
+    public String createContent(final GitCreateContentRequest request) throws IOException, FlowRegistryException {
         final String branch = request.getBranch();
         final String resolvedPath = getResolvedPath(request.getPath());
         LOGGER.debug("Creating content at path [{}] on branch [{}] in repo [{}] ", resolvedPath, branch, repository.getName());
@@ -170,6 +189,7 @@ public class GitHubRepositoryClient {
      * @throws IOException if an I/O error happens calling GitHub
      * @throws FlowRegistryException if a non I/O error happens calling GitHub
      */
+    @Override
     public Set<String> getBranches() throws IOException, FlowRegistryException {
         LOGGER.debug("Getting branches for repo [{}]", repository.getName());
         return execute(() -> repository.getBranches().keySet());
@@ -186,6 +206,7 @@ public class GitHubRepositoryClient {
      * @throws IOException if an I/O error happens calling GitHub
      * @throws FlowRegistryException if a non I/O error happens calling GitHub
      */
+    @Override
     public InputStream getContentFromBranch(final String path, final String branch) throws IOException, FlowRegistryException {
         final String resolvedPath = getResolvedPath(path);
         final String branchRef = BRANCH_REF_PATTERN.formatted(branch);
@@ -194,7 +215,7 @@ public class GitHubRepositoryClient {
         return execute(() -> {
             try {
                 final GHContent ghContent = repository.getFileContent(resolvedPath, branchRef);
-                return ghContent.read();
+                return repository.readBlob(ghContent.getSha());
             } catch (final FileNotFoundException fnf) {
                 throwPathOrBranchNotFound(fnf, resolvedPath, branchRef);
                 return null;
@@ -213,6 +234,7 @@ public class GitHubRepositoryClient {
      * @throws IOException if an I/O error happens calling GitHub
      * @throws FlowRegistryException if a non I/O error happens calling GitHub
      */
+    @Override
     public InputStream getContentFromCommit(final String path, final String commitSha) throws IOException, FlowRegistryException {
         final String resolvedPath = getResolvedPath(path);
         LOGGER.debug("Getting content for [{}] from commit [{}] in repo [{}] ", resolvedPath, commitSha, repository.getName());
@@ -220,7 +242,7 @@ public class GitHubRepositoryClient {
         return execute(() -> {
             try {
                 final GHContent ghContent = repository.getFileContent(resolvedPath, commitSha);
-                return ghContent.read();
+                return repository.readBlob(ghContent.getSha());
             } catch (final FileNotFoundException fnf) {
                 throw new FlowRegistryException("Path [" + resolvedPath + "] or Commit [" + commitSha + "] not found", fnf);
             }
@@ -237,7 +259,8 @@ public class GitHubRepositoryClient {
      * @throws IOException if an I/O error happens calling GitHub
      * @throws FlowRegistryException if a non I/O error happens calling GitHub
      */
-    public List<GHCommit> getCommits(final String path, final String branch) throws IOException, FlowRegistryException {
+    @Override
+    public List<GitCommit> getCommits(final String path, final String branch) throws IOException, FlowRegistryException {
         final String resolvedPath = getResolvedPath(path);
         final String branchRef = BRANCH_REF_PATTERN.formatted(branch);
         LOGGER.debug("Getting commits for [{}] from branch [{}] in repo [{}]", resolvedPath, branch, repository.getName());
@@ -245,12 +268,18 @@ public class GitHubRepositoryClient {
         return execute(() -> {
             try {
                 final GHRef branchGhRef = repository.getRef(branchRef);
-                return repository.queryCommits()
+                final List<GHCommit> ghCommits = repository.queryCommits()
                         .path(resolvedPath)
                         .from(branchGhRef.getObject().getSha())
                         .pageSize(COMMIT_PAGE_SIZE)
                         .list()
                         .toList();
+
+                final List<GitCommit> commits = new ArrayList<>();
+                for (final GHCommit ghCommit : ghCommits) {
+                    commits.add(toGitCommit(ghCommit));
+                }
+                return commits;
             } catch (final FileNotFoundException fnf) {
                 throwPathOrBranchNotFound(fnf, resolvedPath, branchRef);
                 return null;
@@ -267,22 +296,9 @@ public class GitHubRepositoryClient {
      * @throws IOException if an I/O error happens calling GitHub
      * @throws FlowRegistryException if a non I/O error happens calling GitHub
      */
+    @Override
     public Set<String> getTopLevelDirectoryNames(final String branch) throws IOException, FlowRegistryException {
         return getDirectoryItems("", branch, GHContent::isDirectory);
-    }
-
-    /**
-     * Gets the names of the directories contained within the given directory.
-     *
-     * @param directory the directory to list
-     * @param branch the branch
-     * @return the set of directory names
-     *
-     * @throws IOException if an I/O error happens calling GitHub
-     * @throws FlowRegistryException if a non I/O error happens calling GitHub
-     */
-    public Set<String> getDirectoryNames(final String directory, final String branch) throws IOException, FlowRegistryException {
-        return getDirectoryItems(directory, branch, GHContent::isDirectory);
     }
 
     /**
@@ -295,6 +311,7 @@ public class GitHubRepositoryClient {
      * @throws IOException if an I/O error happens calling GitHub
      * @throws FlowRegistryException if a non I/O error happens calling GitHub
      */
+    @Override
     public Set<String> getFileNames(final String directory, final String branch) throws IOException, FlowRegistryException {
         return getDirectoryItems(directory, branch, GHContent::isFile);
     }
@@ -337,6 +354,7 @@ public class GitHubRepositoryClient {
      *
      * @throws IOException if an I/O error happens calling GitHub
      */
+    @Override
     public Optional<String> getContentSha(final String path, final String branch) throws IOException, FlowRegistryException {
         final String resolvedPath = getResolvedPath(path);
         final String branchRef = BRANCH_REF_PATTERN.formatted(branch);
@@ -364,14 +382,15 @@ public class GitHubRepositoryClient {
      * @throws IOException if an I/O error happens calling GitHub
      * @throws FlowRegistryException if a non I/O error happens calling GitHub
      */
-    public GHContent deleteContent(final String filePath, final String commitMessage, final String branch) throws FlowRegistryException, IOException {
+    @Override
+    public InputStream deleteContent(final String filePath, final String commitMessage, final String branch) throws FlowRegistryException, IOException {
         final String resolvedPath = getResolvedPath(filePath);
         LOGGER.debug("Deleting file [{}] in repo [{}] on branch [{}]", resolvedPath, repository.getName(), branch);
         return execute(() -> {
             try {
                 GHContent ghContent = repository.getFileContent(resolvedPath);
                 ghContent.delete(commitMessage, branch);
-                return ghContent;
+                return ghContent.read();
             } catch (final FileNotFoundException fnf) {
                 throwPathOrBranchNotFound(fnf, resolvedPath, branch);
                 return null;
@@ -387,6 +406,16 @@ public class GitHubRepositoryClient {
         throw new FlowRegistryException("Path [" + path + "] or Branch [" + branch + "] not found", fileNotFoundException);
     }
 
+    private GitCommit toGitCommit(final GHCommit ghCommit) throws IOException {
+        final GHCommit.ShortInfo shortInfo = ghCommit.getCommitShortInfo();
+        return new GitCommit(
+                ghCommit.getSHA1(),
+                ghCommit.getAuthor().getLogin(),
+                shortInfo.getMessage(),
+                Instant.ofEpochMilli(shortInfo.getCommitDate().getTime())
+        );
+    }
+
     private <T> T execute(final GHRequest<T> action) throws FlowRegistryException, IOException {
         try {
             return action.execute();
@@ -394,6 +423,26 @@ public class GitHubRepositoryClient {
             throw e;
         } catch (final Exception e) {
             throw new FlowRegistryException(e.getMessage(), e);
+        }
+    }
+
+    private AuthorizationProvider getAppInstallationAuthorizationProvider(final Builder builder, final Map<String, String> appPermissions) throws FlowRegistryException {
+        final AuthorizationProvider appAuthorizationProvider = getAppAuthorizationProvider(builder.appId, builder.appPrivateKey);
+        return new AppInstallationAuthorizationProvider(gitHubApp -> {
+            // Get Permissions for initial authentication as GitHub App before returning App Installation
+            appPermissions.putAll(gitHubApp.getPermissions());
+            // Get App Installation for named Repository
+            return gitHubApp.getInstallationByRepository(builder.repoOwner, builder.repoName);
+        }, appAuthorizationProvider);
+    }
+
+    private AuthorizationProvider getAppAuthorizationProvider(final String appId, final String appPrivateKey) throws FlowRegistryException {
+        try {
+            final PrivateKeyReader privateKeyReader = new StandardPrivateKeyReader();
+            final PrivateKey privateKey = privateKeyReader.readPrivateKey(appPrivateKey);
+            return new JWTTokenProvider(appId, privateKey);
+        } catch (final Exception e) {
+            throw new FlowRegistryException("Failed to build Authorization Provider from App ID and App Private Key", e);
         }
     }
 
@@ -423,10 +472,11 @@ public class GitHubRepositoryClient {
         private String apiUrl;
         private GitHubAuthenticationType authenticationType;
         private String personalAccessToken;
-        private String appInstallationToken;
         private String repoOwner;
         private String repoName;
         private String repoPath;
+        private String appPrivateKey;
+        private String appId;
 
         public Builder apiUrl(final String apiUrl) {
             this.apiUrl = apiUrl;
@@ -443,11 +493,6 @@ public class GitHubRepositoryClient {
             return this;
         }
 
-        public Builder appInstallationToken(final String appInstallationToken) {
-            this.appInstallationToken = appInstallationToken;
-            return this;
-        }
-
         public Builder repoOwner(final String repoOwner) {
             this.repoOwner = repoOwner;
             return this;
@@ -460,6 +505,15 @@ public class GitHubRepositoryClient {
 
         public Builder repoPath(final String repoPath) {
             this.repoPath = repoPath;
+            return this;
+        }
+        public Builder appId(final String appId) {
+            this.appId = appId;
+            return this;
+        }
+
+        public Builder appPrivateKey(final String appPrivateKey) {
+            this.appPrivateKey = appPrivateKey;
             return this;
         }
 
