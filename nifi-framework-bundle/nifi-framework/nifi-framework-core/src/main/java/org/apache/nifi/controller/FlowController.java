@@ -1067,6 +1067,48 @@ public class FlowController implements ReportingTaskProvider, FlowAnalysisRulePr
                 }
             }, 0L, 30L, TimeUnit.SECONDS);
 
+            // Parse initial delay
+            
+            final String syncInitialDelayStr = nifiProperties.getProperty("flowcontroller.sync.initial.delay", "5 min");
+            final String syncIntervalStr = nifiProperties.getProperty("flowcontroller.sync.interval", "30 min");
+
+            long syncInitialDelay;
+            long syncInterval;
+            TimeUnit syncTimeUnit;
+
+            if (syncInitialDelayStr.toLowerCase().matches(".*(min|minute).*")) {
+                syncTimeUnit = TimeUnit.MINUTES;
+                syncInitialDelay = Long.parseLong(syncInitialDelayStr.replaceAll("[^\\d]", ""));
+            } else if (syncInitialDelayStr.toLowerCase().matches(".*(sec|second).*")) {
+                syncTimeUnit = TimeUnit.SECONDS;
+                syncInitialDelay = Long.parseLong(syncInitialDelayStr.replaceAll("[^\\d]", ""));
+            } else if (syncInitialDelayStr.toLowerCase().matches(".*(hour|hr|h).*")) {
+                syncTimeUnit = TimeUnit.HOURS;
+                syncInitialDelay = Long.parseLong(syncInitialDelayStr.replaceAll("[^\\d]", ""));
+            } else if (syncInitialDelayStr.toLowerCase().matches(".*(day|d).*")) {
+                syncTimeUnit = TimeUnit.DAYS;
+                syncInitialDelay = Long.parseLong(syncInitialDelayStr.replaceAll("[^\\d]", ""));
+            } else {
+                syncTimeUnit = TimeUnit.MINUTES;
+                syncInitialDelay = 5; // default
+            }
+
+            // Parse interval
+            if (syncIntervalStr.toLowerCase().matches(".*(min|minute).*")) {
+                syncInterval = Long.parseLong(syncIntervalStr.replaceAll("[^\\d]", ""));
+            } else if (syncIntervalStr.toLowerCase().matches(".*(sec|second).*")) {
+                syncInterval = Long.parseLong(syncIntervalStr.replaceAll("[^\\d]", ""));
+                syncTimeUnit = TimeUnit.SECONDS;
+            } else if (syncIntervalStr.toLowerCase().matches(".*(hour|hr|h).*")) {
+                syncInterval = Long.parseLong(syncIntervalStr.replaceAll("[^\\d]", ""));
+                syncTimeUnit = TimeUnit.HOURS;
+            } else if (syncIntervalStr.toLowerCase().matches(".*(day|d).*")) {
+                syncInterval = Long.parseLong(syncIntervalStr.replaceAll("[^\\d]", ""));
+                syncTimeUnit = TimeUnit.DAYS;
+            } else {
+                syncInterval = 30; // default
+            }
+
             timerDrivenEngineRef.get().scheduleWithFixedDelay(() -> {
                 final ProcessGroup rootGroup = flowManager.getRootGroup();
                 final List<ProcessGroup> allGroups = rootGroup.findAllProcessGroups();
@@ -1079,7 +1121,7 @@ public class FlowController implements ReportingTaskProvider, FlowAnalysisRulePr
                         LOG.error("Failed to synchronize {} with Flow Registry", group, e);
                     }
                 }
-            }, 5, 30, TimeUnit.MINUTES);
+            }, syncInitialDelay, syncInterval, syncTimeUnit);
 
             initialized.set(true);
         } finally {
