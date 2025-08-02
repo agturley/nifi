@@ -56,9 +56,6 @@ public class ProcessGroupSchema extends BaseSchemaWithIdAndName implements Writa
     private List<PortSchema> outputPortSchemas;
     private String statelessContentRepositoryPath;
 
-    public String getStatelessContentRepositoryPath() {
-        return statelessContentRepositoryPath;
-    }
     public ProcessGroupSchema(Map map, String wrapperName) {
         super(map, wrapperName);
         
@@ -71,7 +68,7 @@ public class ProcessGroupSchema extends BaseSchemaWithIdAndName implements Writa
         inputPortSchemas = getOptionalKeyAsList(map, INPUT_PORTS_KEY, m -> new PortSchema(m, "InputPort(id: {id}, name: {name})"), wrapperName);
         outputPortSchemas = getOptionalKeyAsList(map, OUTPUT_PORTS_KEY, m -> new PortSchema(m, "OutputPort(id: {id}, name: {name})"), wrapperName);
         processGroupSchemas = getOptionalKeyAsList(map, PROCESS_GROUPS_KEY, m -> new ProcessGroupSchema(m, "ProcessGroup(id: {id}, name: {name})"), wrapperName);
-        this.statelessContentRepositoryPath = getOptionalKeyAsString(map, "statelessContentRepositoryPath");
+
 
 
         if (ConfigSchema.TOP_LEVEL_NAME.equals(wrapperName)) {
