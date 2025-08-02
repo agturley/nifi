@@ -54,9 +54,14 @@ public class ProcessGroupSchema extends BaseSchemaWithIdAndName implements Writa
     private List<ProcessGroupSchema> processGroupSchemas;
     private List<PortSchema> inputPortSchemas;
     private List<PortSchema> outputPortSchemas;
+    private String statelessContentRepositoryPath;
 
+    public String getStatelessContentRepositoryPath() {
+        return statelessContentRepositoryPath;
+    }
     public ProcessGroupSchema(Map map, String wrapperName) {
         super(map, wrapperName);
+        
 
         processors = getOptionalKeyAsList(map, PROCESSORS_KEY, ProcessorSchema::new, wrapperName);
         controllerServiceSchemas = getOptionalKeyAsList(map, CONTROLLER_SERVICES_KEY, ControllerServiceSchema::new, wrapperName);
@@ -66,6 +71,8 @@ public class ProcessGroupSchema extends BaseSchemaWithIdAndName implements Writa
         inputPortSchemas = getOptionalKeyAsList(map, INPUT_PORTS_KEY, m -> new PortSchema(m, "InputPort(id: {id}, name: {name})"), wrapperName);
         outputPortSchemas = getOptionalKeyAsList(map, OUTPUT_PORTS_KEY, m -> new PortSchema(m, "OutputPort(id: {id}, name: {name})"), wrapperName);
         processGroupSchemas = getOptionalKeyAsList(map, PROCESS_GROUPS_KEY, m -> new ProcessGroupSchema(m, "ProcessGroup(id: {id}, name: {name})"), wrapperName);
+        this.statelessContentRepositoryPath = getOptionalKeyAsString(map, "statelessContentRepositoryPath");
+
 
         if (ConfigSchema.TOP_LEVEL_NAME.equals(wrapperName)) {
             if (!inputPortSchemas.isEmpty()) {
@@ -108,6 +115,7 @@ public class ProcessGroupSchema extends BaseSchemaWithIdAndName implements Writa
         putListIfNotNull(result, FUNNELS_KEY, funnels);
         putListIfNotNull(result, CONNECTIONS_KEY, connections);
         putListIfNotNull(result, REMOTE_PROCESS_GROUPS_KEY, remoteProcessGroups);
+        StringUtil.doIfNotNullOrEmpty(statelessContentRepositoryPath, val -> result.put("statelessContentRepositoryPath", val));
         return result;
     }
 

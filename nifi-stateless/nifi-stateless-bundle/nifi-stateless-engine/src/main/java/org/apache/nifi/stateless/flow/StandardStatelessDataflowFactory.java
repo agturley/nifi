@@ -99,6 +99,9 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import javax.net.ssl.SSLContext;
+import org.apache.nifi.flow.Bundle;
+import org.apache.nifi.flow.VersionedFlowSnapshot;
+import org.apache.nifi.flow.serialization.FlowEncodingVersion;
 
 public class StandardStatelessDataflowFactory implements StatelessDataflowFactory {
     private static final Logger logger = LoggerFactory.getLogger(StandardStatelessDataflowFactory.class);
@@ -241,6 +244,19 @@ public class StandardStatelessDataflowFactory implements StatelessDataflowFactor
             final ProcessContextFactory rawProcessContextFactory = new StatelessProcessContextFactory(controllerServiceProvider, stateManagerProvider);
             final ProcessContextFactory processContextFactory = new CachingProcessContextFactory(rawProcessContextFactory);
             contentRepo = createContentRepository(engineConfiguration);
+            // Inject stateless content repo path if specified
+            try {
+                final var snapshot = dataflowDefinition.getVersionedExternalFlow();
+                final var rootSchema = snapshot.getFlowContents().getProcessGroup();
+                final String contentRepoPath = rootSchema.getStatelessContentRepositoryPath();
+
+                if (contentRepoPath != null && !contentRepoPath.isBlank()) {
+                    logger.info("Using custom stateless content repository path: {}", contentRepoPath);
+                    engineConfiguration.setProperty("nifi.stateless.content.repo.path", contentRepoPath);
+                }
+            } catch (Exception e) {
+                logger.warn("Unable to determine custom stateless content repo path: {}", e.getMessage());
+            }
             flowFileRepo = new StatelessFlowFileRepository();
 
             final RepositoryContextFactory repositoryContextFactory = new StatelessRepositoryContextFactory(contentRepo, flowFileRepo, flowFileEventRepo,

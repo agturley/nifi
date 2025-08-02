@@ -215,7 +215,8 @@ export class EditProcessGroup extends TabbedDialog {
             ),
             logFileSuffix: new FormControl(request.entity.component.logFileSuffix),
             comments: new FormControl(request.entity.component.comments),
-            parameterContext: new FormControl(null)
+            parameterContext: new FormControl(null),
+            statelessContentRepositoryPath: new FormControl(request.entity.component.statelessContentRepositoryPath)
         });
 
         this.initialMaxConcurrentTasks = request.entity.component.maxConcurrentTasks;
@@ -273,6 +274,7 @@ export class EditProcessGroup extends TabbedDialog {
         if (this.editProcessGroupForm.get('executionEngine')?.value === this.STATELESS) {
             payload.component.maxConcurrentTasks = this.editProcessGroupForm.get('maxConcurrentTasks')?.value;
             payload.component.statelessFlowTimeout = this.editProcessGroupForm.get('statelessFlowTimeout')?.value;
+            payload.component.statelessContentRepositoryPath = this.editProcessGroupForm.get('statelessContentRepositoryPath')?.value
         }
 
         this.editProcessGroup.next(payload);

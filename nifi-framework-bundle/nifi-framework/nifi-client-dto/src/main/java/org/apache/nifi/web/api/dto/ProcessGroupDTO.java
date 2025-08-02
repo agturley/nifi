@@ -41,7 +41,7 @@ public class ProcessGroupDTO extends ComponentDTO {
     private String executionEngine;
     private Integer maxConcurrentTasks;
     private String statelessFlowTimeout;
-
+    private String statelessContentRepositoryPath;
     private Integer runningCount;
     private Integer stoppedCount;
     private Integer invalidCount;
@@ -82,6 +82,14 @@ public class ProcessGroupDTO extends ComponentDTO {
 
     public void setName(String name) {
         this.name = name;
+    }
+
+    public String getStatelessContentRepositoryPath() {
+        return statelessContentRepositoryPath;
+    }
+
+    public void setStatelessContentRepositoryPath(String statelessContentRepositoryPath) {
+        this.statelessContentRepositoryPath = statelessContentRepositoryPath;
     }
 
     /**
