@@ -113,6 +113,7 @@ export class EditProcessGroup extends TabbedDialog {
     protected readonly STATELESS: string = 'STATELESS';
     private initialMaxConcurrentTasks: number;
     private initialStatelessFlowTimeout: string;
+    private initialStatelessContentRepositoryPath: string;
     private _parameterContexts: ParameterContextEntity[] = [];
 
     editProcessGroupForm: FormGroup;
@@ -221,7 +222,7 @@ export class EditProcessGroup extends TabbedDialog {
 
         this.initialMaxConcurrentTasks = request.entity.component.maxConcurrentTasks;
         this.initialStatelessFlowTimeout = request.entity.component.statelessFlowTimeout;
-
+        this.initialStatelessContentRepositoryPath = request.entity.component.statelessContentRepositoryPath;
         this.executionEngineChanged(request.entity.component.executionEngine);
     }
 
@@ -235,9 +236,14 @@ export class EditProcessGroup extends TabbedDialog {
                 'statelessFlowTimeout',
                 new FormControl(this.initialStatelessFlowTimeout, Validators.required)
             );
+            this.editProcessGroupForm.addControl(
+                'statelessContentRepositoryPath',
+                new FormControl(this.initialStatelessContentRepositoryPath, Validators.required)
+            );
         } else {
             this.editProcessGroupForm.removeControl('maxConcurrentTasks');
             this.editProcessGroupForm.removeControl('statelessFlowTimeout');
+            this.editProcessGroupForm.removeControl('statelessContentRepositoryPath');
         }
     }
 

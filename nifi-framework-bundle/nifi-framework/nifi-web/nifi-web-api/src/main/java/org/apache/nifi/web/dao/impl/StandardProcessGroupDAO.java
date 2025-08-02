@@ -105,6 +105,9 @@ public class StandardProcessGroupDAO extends ComponentDAO implements ProcessGrou
         if (processGroup.getStatelessFlowTimeout() != null) {
             group.setStatelessFlowTimeout(processGroup.getStatelessFlowTimeout());
         }
+        if (processGroup.getStatelessContentRepositoryPath() != null) {
+            group.setStatelessContentRepositoryPath(processGroup.getStatelessContentRepositoryPath());
+        }      
         if (processGroup.getMaxConcurrentTasks() != null) {
             group.setMaxConcurrentTasks(processGroup.getMaxConcurrentTasks());
         }
@@ -496,13 +499,10 @@ public class StandardProcessGroupDAO extends ComponentDAO implements ProcessGrou
         if (processGroupDTO.getExecutionEngine() != null) {
             group.setExecutionEngine(ExecutionEngine.valueOf(processGroupDTO.getExecutionEngine()));
         }
-        if (ExecutionEngine.STATELESS.name().equalsIgnoreCase(processGroupDTO.getExecutionEngine())) {
-            final String contentRepoPath = processGroupDTO.getStatelessContentRepositoryPath();
-            if (contentRepoPath != null && !contentRepoPath.isBlank()) {
-                logger.info("Setting stateless content repository path to: {}", contentRepoPath);
-                group.setStatelessContentRepositoryPath(contentRepoPath);
-            }
-        }
+
+        if (processGroupDTO.getStatelessContentRepositoryPath() != null) {
+            group.setStatelessContentRepositoryPath(processGroupDTO.getStatelessContentRepositoryPath());
+        }      
         if (processGroupDTO.getMaxConcurrentTasks() != null) {
             group.setMaxConcurrentTasks(processGroupDTO.getMaxConcurrentTasks());
         }
