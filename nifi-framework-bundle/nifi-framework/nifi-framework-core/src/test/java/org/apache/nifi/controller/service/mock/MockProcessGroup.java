@@ -905,4 +905,16 @@ public class MockProcessGroup implements ProcessGroup {
     public void terminateProcessor(ProcessorNode processor) {
     }
 
+    @Override
+    public void setStatelessContentRepositoryPath(String StatelessContentRepositoryPath) {
+        // TODO Auto-generated method stub
+        throw new UnsupportedOperationException("Unimplemented method 'setStatelessContentRepositoryPath'");
+    }
+
+    @Override
+    public String getStatelessContentRepositoryPath() {
+        // TODO Auto-generated method stub
+        throw new UnsupportedOperationException("Unimplemented method 'getStatelessContentRepositoryPath'");
+    }
+
 }

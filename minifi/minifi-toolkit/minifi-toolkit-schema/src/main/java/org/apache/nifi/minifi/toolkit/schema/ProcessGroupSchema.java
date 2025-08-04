@@ -56,6 +56,7 @@ public class ProcessGroupSchema extends BaseSchemaWithIdAndName implements Writa
     private List<PortSchema> outputPortSchemas;
     private String statelessContentRepositoryPath;
 
+
     public ProcessGroupSchema(Map map, String wrapperName) {
         super(map, wrapperName);
         

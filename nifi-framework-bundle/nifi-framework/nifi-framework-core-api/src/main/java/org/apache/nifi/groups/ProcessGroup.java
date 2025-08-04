@@ -1258,8 +1258,15 @@ public interface ProcessGroup extends ComponentAuthorizable, Positionable, Versi
     void setStatelessFlowTimeout(String timeout);
 
     /**
+     * Sets the Stateless Content Repository.
+     * @param StatelessContentRepositoryPath a string representation of the timeout
+     */
+    void setStatelessContentRepositoryPath(String StatelessContentRepositoryPath);
+
+    /**
      * Returns the configured maximum amount of time that a Stateless Flow can run before it times out and is considered a failure
      * @return the configured maximum amount of time that a Stateless Flow can run before it times out and is considered a failure
      */
     String getStatelessFlowTimeout();
+    String getStatelessContentRepositoryPath();
 }

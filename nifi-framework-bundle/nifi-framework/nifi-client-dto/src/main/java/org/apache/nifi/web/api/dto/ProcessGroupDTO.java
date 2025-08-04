@@ -426,6 +426,7 @@ public class ProcessGroupDTO extends ComponentDTO {
     public void setMaxConcurrentTasks(final Integer maxConcurrentTasks) {
         this.maxConcurrentTasks = maxConcurrentTasks;
     }
+    
 
     @Schema(description = "The maximum amount of time that the flow can be run using the Stateless Engine before the flow times out")
     public String getStatelessFlowTimeout() {

@@ -4539,4 +4539,16 @@ public final class StandardProcessGroup implements ProcessGroup {
             LOG.warn("Attempted to set Stateless Flow Timeout for {} to invalid value: {}; ignoring this value", this, statelessFlowTimeout);
         }
     }
+
+    @Override
+    public void setStatelessContentRepositoryPath(String StatelessContentRepositoryPath) {
+        // TODO Auto-generated method stub
+        throw new UnsupportedOperationException("Unimplemented method 'setStatelessContentRepositoryPath'");
+    }
+
+    @Override
+    public String getStatelessContentRepositoryPath() {
+        // TODO Auto-generated method stub
+        throw new UnsupportedOperationException("Unimplemented method 'getStatelessContentRepositoryPath'");
+    }
 }
