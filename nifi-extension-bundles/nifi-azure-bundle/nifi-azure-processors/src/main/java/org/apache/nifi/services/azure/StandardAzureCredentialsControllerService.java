@@ -17,6 +17,9 @@
 package org.apache.nifi.services.azure;
 
 import com.azure.core.credential.TokenCredential;
+import com.azure.core.http.HttpClient;
+import com.azure.core.http.netty.NettyAsyncHttpClientBuilder;
+import com.azure.identity.ClientSecretCredentialBuilder;
 import com.azure.identity.DefaultAzureCredentialBuilder;
 import com.azure.identity.ManagedIdentityCredentialBuilder;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
@@ -105,8 +108,14 @@ public class StandardAzureCredentialsControllerService extends AbstractControlle
         config.renameProperty("managed-identity-client-id", MANAGED_IDENTITY_CLIENT_ID.getName());
     }
 
+    private HttpClient getHttpClient() {
+        return new NettyAsyncHttpClientBuilder().build();
+    }
+
     private TokenCredential getDefaultAzureCredential() {
-        return new DefaultAzureCredentialBuilder().build();
+        return new DefaultAzureCredentialBuilder()
+                .httpClient(getHttpClient())
+                .build();
     }
 
     private TokenCredential getManagedIdentityCredential(final ConfigurationContext context) {
@@ -114,6 +123,20 @@ public class StandardAzureCredentialsControllerService extends AbstractControlle
 
         return new ManagedIdentityCredentialBuilder()
                 .clientId(clientId)
+                .httpClient(getHttpClient())
+                .build();
+    }
+
+    private TokenCredential getServicePrincipalCredential(final ConfigurationContext context) {
+        final String tenantId = context.getProperty(SERVICE_PRINCIPAL_TENANT_ID).getValue();
+        final String clientId = context.getProperty(SERVICE_PRINCIPAL_CLIENT_ID).getValue();
+        final String clientSecret = context.getProperty(SERVICE_PRINCIPAL_CLIENT_SECRET).getValue();
+
+        return new ClientSecretCredentialBuilder()
+                .tenantId(tenantId)
+                .clientId(clientId)
+                .clientSecret(clientSecret)
+                .httpClient(getHttpClient())
                 .build();
     }
 
