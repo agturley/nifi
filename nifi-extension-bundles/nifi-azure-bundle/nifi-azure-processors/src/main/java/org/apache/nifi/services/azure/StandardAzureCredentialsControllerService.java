@@ -127,19 +127,6 @@ public class StandardAzureCredentialsControllerService extends AbstractControlle
                 .build();
     }
 
-    private TokenCredential getServicePrincipalCredential(final ConfigurationContext context) {
-        final String tenantId = context.getProperty(SERVICE_PRINCIPAL_TENANT_ID).getValue();
-        final String clientId = context.getProperty(SERVICE_PRINCIPAL_CLIENT_ID).getValue();
-        final String clientSecret = context.getProperty(SERVICE_PRINCIPAL_CLIENT_SECRET).getValue();
-
-        return new ClientSecretCredentialBuilder()
-                .tenantId(tenantId)
-                .clientId(clientId)
-                .clientSecret(clientSecret)
-                .httpClient(getHttpClient())
-                .build();
-    }
-
     @Override
     public String toString() {
         return "StandardAzureCredentialsControllerService[id=" + getIdentifier() + "]";
