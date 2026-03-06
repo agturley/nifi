@@ -1,0 +1,28 @@
+jvm:
+  heapSize: "8g"
+  gcCollector: "g1gc"      # Options: zgc, g1gc
+  gcLogging:
+    enabled: true
+    path: "/opt/nifi/logs/gc.log"
+    fileCount: 5
+    fileSize: "20m"
+
+  # GC tuning - leave any value empty to use JVM defaults.
+  # Most users should not need to set these.
+  zgc:
+    generational:
+    concGCThreads:
+    alwaysPreTouch:
+    extraArgs: []
+
+  g1gc:
+    maxGCPauseMillis:
+    heapRegionSize:
+    newSizePercent:
+    maxNewSizePercent:
+    mixedGCLiveThresholdPercent:
+    initiatingHeapOccupancyPercent:
+    concGCThreads:
+    parallelGCThreads:
+    alwaysPreTouch:
+    extraArgs: []
