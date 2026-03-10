@@ -13,6 +13,12 @@ java.arg.22=-XX:ConcGCThreads={{ .concGCThreads }}
 {{- if not (kindIs "invalid" .alwaysPreTouch) }}
 java.arg.23=-XX:{{ if .alwaysPreTouch }}+{{ else }}-{{ end }}AlwaysPreTouch
 {{- end }}
+{{- if not (kindIs "invalid" .uncommitDelay) }}
+java.arg.24=-XX:ZUncommitDelay={{ .uncommitDelay }}
+{{- end }}
+{{- if not (kindIs "invalid" .disableExplicitGC) }}
+java.arg.25=-XX:{{ if .disableExplicitGC }}+{{ else }}-{{ end }}DisableExplicitGC
+{{- end }}
 {{- range $i, $arg := .extraArgs }}
 java.arg.{{ add 40 $i }}={{ $arg }}
 {{- end }}
