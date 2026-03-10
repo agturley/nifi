@@ -10,9 +10,11 @@ jvm:
   # GC tuning - leave any value empty to use JVM defaults.
   # Most users should not need to set these.
   zgc:
-    generational:
-    concGCThreads:
-    alwaysPreTouch:
+    generational: true        # Java 21+
+    alwaysPreTouch: true
+    uncommitDelay: 300        # seconds before returning unused heap to OS
+    disableExplicitGC: true   # suppress System.gc() calls
+    concGCThreads:            # leave unset; ZGC self-tunes based on heap size
     extraArgs: []
 
   g1gc:
@@ -24,5 +26,5 @@ jvm:
     initiatingHeapOccupancyPercent:
     concGCThreads:
     parallelGCThreads:
-    alwaysPreTouch:
+    alwaysPreTouch: true
     extraArgs: []
