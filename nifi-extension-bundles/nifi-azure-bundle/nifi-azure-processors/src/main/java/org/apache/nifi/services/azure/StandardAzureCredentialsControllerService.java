@@ -37,10 +37,12 @@ import org.apache.nifi.migration.PropertyConfiguration;
 import org.apache.nifi.migration.ProxyServiceMigration;
 import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.util.StandardValidators;
-import org.apache.nifi.processors.azure.storage.utils.AzureStorageUtils;
 import org.apache.nifi.proxy.ProxyConfiguration;
 import org.apache.nifi.proxy.ProxySpec;
+import org.apache.nifi.proxy.SocksVersion;
 
+import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -165,7 +167,7 @@ public class StandardAzureCredentialsControllerService extends AbstractControlle
 
     @OnEnabled
     public void onConfigured(final ConfigurationContext context) {
-        proxyOptions = AzureStorageUtils.getProxyOptions(context);
+        proxyOptions = resolveProxyOptions(context);
         final String configurationStrategy = context.getProperty(CREDENTIAL_CONFIGURATION_STRATEGY).getValue();
 
         if (DEFAULT_CREDENTIAL.getValue().equals(configurationStrategy)) {
@@ -188,6 +190,29 @@ public class StandardAzureCredentialsControllerService extends AbstractControlle
         config.renameProperty("credential-configuration-strategy", CREDENTIAL_CONFIGURATION_STRATEGY.getName());
         config.renameProperty("managed-identity-client-id", MANAGED_IDENTITY_CLIENT_ID.getName());
         ProxyServiceMigration.renameProxyConfigurationServiceProperty(config);
+    }
+
+    private ProxyOptions resolveProxyOptions(final ConfigurationContext context) {
+        final ProxyConfiguration proxyConfiguration = ProxyConfiguration.getConfiguration(context);
+        if (proxyConfiguration == ProxyConfiguration.DIRECT_CONFIGURATION) {
+            return null;
+        }
+        final InetSocketAddress address = new InetSocketAddress(
+                proxyConfiguration.getProxyServerHost(), proxyConfiguration.getProxyServerPort());
+        final ProxyOptions.Type type;
+        if (proxyConfiguration.getProxyType() == Proxy.Type.HTTP) {
+            type = ProxyOptions.Type.HTTP;
+        } else {
+            final SocksVersion socksVersion = proxyConfiguration.getSocksVersion();
+            type = ProxyOptions.Type.valueOf(socksVersion.name());
+        }
+        final ProxyOptions options = new ProxyOptions(type, address);
+        final String username = proxyConfiguration.getProxyUserName();
+        final String password = proxyConfiguration.getProxyUserPassword();
+        if (username != null && password != null) {
+            options.setCredentials(username, password);
+        }
+        return options;
     }
 
     private HttpClient getHttpClient() {
