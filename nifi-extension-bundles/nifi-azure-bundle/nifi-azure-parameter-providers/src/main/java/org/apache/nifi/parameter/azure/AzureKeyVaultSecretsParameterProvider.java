@@ -16,7 +16,7 @@
  */
 package org.apache.nifi.parameter.azure;
 
-import com.azure.core.http.HttpClient;
+import com.azure.core.http.ProxyOptions;
 import com.azure.core.http.jdk.httpclient.JdkHttpClientBuilder;
 import com.azure.security.keyvault.secrets.SecretClient;
 import com.azure.security.keyvault.secrets.SecretClientBuilder;
@@ -55,7 +55,8 @@ public class AzureKeyVaultSecretsParameterProvider extends AbstractParameterProv
     public static final PropertyDescriptor AZURE_CREDENTIALS_SERVICE = new PropertyDescriptor.Builder()
             .name("azure-credentials-service")
             .displayName("Azure Credentials Service")
-            .description("Controller service used to obtain Azure credentials to be used with Key Vault client.")
+            .description("Controller service used to obtain Azure credentials to be used with Key Vault client. " +
+                    "Proxy configuration for Key Vault requests is also sourced from this service.")
             .required(true)
             .identifiesControllerService(AzureCredentialsService.class)
             .build();
@@ -193,9 +194,13 @@ public class AzureKeyVaultSecretsParameterProvider extends AbstractParameterProv
         final AzureCredentialsService credentialsService =
                 context.getProperty(AZURE_CREDENTIALS_SERVICE).asControllerService(AzureCredentialsService.class);
         final String vaultUrl = context.getProperty(KEY_VAULT_URI).getValue();
-        final HttpClient httpClient = new JdkHttpClientBuilder().build();
+        final JdkHttpClientBuilder httpClientBuilder = new JdkHttpClientBuilder();
+        final ProxyOptions proxyOptions = credentialsService.getProxyOptions();
+        if (proxyOptions != null) {
+            httpClientBuilder.proxy(proxyOptions);
+        }
         return new SecretClientBuilder()
-                .httpClient(httpClient)
+                .httpClient(httpClientBuilder.build())
                 .credential(credentialsService.getCredentials())
                 .vaultUrl(vaultUrl)
                 .buildClient();

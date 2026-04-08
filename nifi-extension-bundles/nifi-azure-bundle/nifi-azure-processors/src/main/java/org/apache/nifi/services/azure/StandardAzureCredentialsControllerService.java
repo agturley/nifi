@@ -18,6 +18,7 @@ package org.apache.nifi.services.azure;
 
 import com.azure.core.credential.TokenCredential;
 import com.azure.core.http.HttpClient;
+import com.azure.core.http.ProxyOptions;
 import com.azure.core.http.netty.NettyAsyncHttpClientBuilder;
 import com.azure.identity.ClientSecretCredentialBuilder;
 import com.azure.identity.DefaultAzureCredentialBuilder;
@@ -27,13 +28,21 @@ import org.apache.nifi.annotation.documentation.Tags;
 import org.apache.nifi.annotation.lifecycle.OnEnabled;
 import org.apache.nifi.components.AllowableValue;
 import org.apache.nifi.components.PropertyDescriptor;
+import org.apache.nifi.components.ValidationContext;
+import org.apache.nifi.components.ValidationResult;
 import org.apache.nifi.controller.AbstractControllerService;
 import org.apache.nifi.controller.ConfigurationContext;
 import org.apache.nifi.expression.ExpressionLanguageScope;
 import org.apache.nifi.migration.PropertyConfiguration;
+import org.apache.nifi.migration.ProxyServiceMigration;
 import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.util.StandardValidators;
+import org.apache.nifi.processors.azure.storage.utils.AzureStorageUtils;
+import org.apache.nifi.proxy.ProxyConfiguration;
+import org.apache.nifi.proxy.ProxySpec;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -114,16 +123,23 @@ public class StandardAzureCredentialsControllerService extends AbstractControlle
             .dependsOn(CREDENTIAL_CONFIGURATION_STRATEGY, IDENTITY_FEDERATION)
             .build();
 
+    private static final ProxySpec[] PROXY_SPECS = {ProxySpec.HTTP, ProxySpec.SOCKS};
+    public static final PropertyDescriptor PROXY_CONFIGURATION_SERVICE = new PropertyDescriptor.Builder()
+            .fromPropertyDescriptor(ProxyConfiguration.createProxyConfigPropertyDescriptor(PROXY_SPECS))
+            .build();
+
     private static final List<PropertyDescriptor> PROPERTY_DESCRIPTORS = List.of(
             CREDENTIAL_CONFIGURATION_STRATEGY,
             MANAGED_IDENTITY_CLIENT_ID,
             SERVICE_PRINCIPAL_TENANT_ID,
             SERVICE_PRINCIPAL_CLIENT_ID,
             SERVICE_PRINCIPAL_CLIENT_SECRET,
-            IDENTITY_FEDERATION_TOKEN_PROVIDER
+            IDENTITY_FEDERATION_TOKEN_PROVIDER,
+            PROXY_CONFIGURATION_SERVICE
     );
 
     private TokenCredential credentials;
+    private ProxyOptions proxyOptions;
 
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
@@ -131,12 +147,25 @@ public class StandardAzureCredentialsControllerService extends AbstractControlle
     }
 
     @Override
+    protected Collection<ValidationResult> customValidate(final ValidationContext context) {
+        final List<ValidationResult> results = new ArrayList<>();
+        ProxyConfiguration.validateProxySpec(context, results, PROXY_SPECS);
+        return results;
+    }
+
+    @Override
     public TokenCredential getCredentials() throws ProcessException {
         return credentials;
     }
 
+    @Override
+    public ProxyOptions getProxyOptions() {
+        return proxyOptions;
+    }
+
     @OnEnabled
     public void onConfigured(final ConfigurationContext context) {
+        proxyOptions = AzureStorageUtils.getProxyOptions(context);
         final String configurationStrategy = context.getProperty(CREDENTIAL_CONFIGURATION_STRATEGY).getValue();
 
         if (DEFAULT_CREDENTIAL.getValue().equals(configurationStrategy)) {
@@ -158,10 +187,15 @@ public class StandardAzureCredentialsControllerService extends AbstractControlle
     public void migrateProperties(PropertyConfiguration config) {
         config.renameProperty("credential-configuration-strategy", CREDENTIAL_CONFIGURATION_STRATEGY.getName());
         config.renameProperty("managed-identity-client-id", MANAGED_IDENTITY_CLIENT_ID.getName());
+        ProxyServiceMigration.renameProxyConfigurationServiceProperty(config);
     }
 
     private HttpClient getHttpClient() {
-        return new NettyAsyncHttpClientBuilder().build();
+        final NettyAsyncHttpClientBuilder builder = new NettyAsyncHttpClientBuilder();
+        if (proxyOptions != null) {
+            builder.proxy(proxyOptions);
+        }
+        return builder.build();
     }
 
     private TokenCredential getDefaultAzureCredential() {

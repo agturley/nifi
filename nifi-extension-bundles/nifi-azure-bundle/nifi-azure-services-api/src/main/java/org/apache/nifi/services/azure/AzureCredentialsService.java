@@ -17,6 +17,7 @@
 package org.apache.nifi.services.azure;
 
 import com.azure.core.credential.TokenCredential;
+import com.azure.core.http.ProxyOptions;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
 import org.apache.nifi.annotation.documentation.Tags;
 import org.apache.nifi.controller.ControllerService;
@@ -36,4 +37,13 @@ public interface AzureCredentialsService extends ControllerService {
      * @see <a href="https://learn.microsoft.com/en-us/azure/developer/java/sdk/identity">Azure Identity and Authentication</a>
      */
     TokenCredential getCredentials() throws ProcessException;
+
+    /**
+     * Get proxy options to use when making HTTP calls to Azure services.
+     * Returns null if no proxy is configured.
+     * @return {@code ProxyOptions} or null
+     */
+    default ProxyOptions getProxyOptions() {
+        return null;
+    }
 }
